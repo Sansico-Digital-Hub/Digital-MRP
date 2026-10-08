@@ -8,11 +8,13 @@ import {
   useBulkDeleteOutstandingPO,
   useImportOutstandingPO,
   type OutstandingPOData,
-  type OutstandingPOImportError
+  type OutstandingPOImportError,
+  type OutstandingPOUploadResult
 } from '../hooks/useOutstandingPO';
 import { FileSpreadsheet, Plus, Upload, Loader2, Search, Pencil, Trash2, X, Check, Save, Folder, ArrowLeft, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Lock, CalendarPlus, AlertTriangle } from 'lucide-react';
 import { usePeriods, useCreatePeriod, monthLabel } from '../hooks/usePeriods';
 import { PeriodSelect } from '../components/PeriodSelect';
+import { RefBSummary, RefBValue, matchesMtl, REF_B_MTL_MESSAGE } from '../components/RefB';
 import { format } from 'date-fns';
 
 /** Satu baris Outstanding PO sebelum disimpan (hasil parse Excel / edit di preview). */
@@ -28,6 +30,8 @@ type PoRowLike = {
   qtyOrderUnit: string;
   qtyDelivered: number;
   qtyDeliveredUnit: string;
+  /** Referensi customer (kolom Excel `PR Ref-B`). */
+  refB?: string | null;
 };
 
 /** Total per satuan — kg dan rim TIDAK boleh dijumlahkan jadi satu angka. */
@@ -42,6 +46,8 @@ interface PoGroup<T> {
   items: T[];
   /** Nomor PO unik di grup ini (satu PO boleh muncul di beberapa baris). */
   poNumbers: string[];
+  /** Referensi customer unik di grup ini (kolom `PR Ref-B`). */
+  refBs: string[];
   /** Label tanggal rencana yang unik, mis. "2 Plan Dates". */
   planDateLabels: string[];
   supplierNames: string;
@@ -87,6 +93,7 @@ function buildPoGroups<T extends PoRowLike>(rows: T[]): PoGroup<T>[] {
         itemDesc: label,
         items: [],
         poNumbers: [],
+        refBs: [],
         planDateLabels: [],
         supplierNames: '',
         orderTotals: [],
@@ -98,6 +105,9 @@ function buildPoGroups<T extends PoRowLike>(rows: T[]): PoGroup<T>[] {
 
     const no = (r.poNumber || '').trim();
     if (no && !g.poNumbers.includes(no)) g.poNumbers.push(no);
+
+    const ref = (r.refB || '').trim();
+    if (ref && !g.refBs.includes(ref)) g.refBs.push(ref);
 
     const dateLabel = safeFormatDate(r.planReceivedDate);
     if (dateLabel !== '—' && !g.planDateLabels.includes(dateLabel)) g.planDateLabels.push(dateLabel);
@@ -214,6 +224,8 @@ export function OutstandingPO() {
   const [previewData, setPreviewData] = useState<OutstandingPORow[]>([]);
   /** Baris Excel yang gagal diimpor (mis. kolom `PO NO` kosong). */
   const [importErrors, setImportErrors] = useState<OutstandingPOImportError[]>([]);
+  /** Ringkasan hasil pembacaan file (total/masuk MTL/dilewati). */
+  const [uploadSummary, setUploadSummary] = useState<OutstandingPOUploadResult['summary'] | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [previewSearchTerm, setPreviewSearchTerm] = useState('');
   const [previewEditingIndex, setPreviewEditingIndex] = useState<number | null>(null);
@@ -225,6 +237,7 @@ export function OutstandingPO() {
     qtyOrderUnit: 'kg',
     qtyDelivered: '',
     qtyDeliveredUnit: 'kg',
+    refB: '',
   });
 
   const [isManualOpen, setIsManualOpen] = useState(false);
@@ -237,6 +250,7 @@ export function OutstandingPO() {
     qtyOrderUnit: 'kg',
     qtyDelivered: '',
     qtyDeliveredUnit: 'kg',
+    refB: '',
   });
   
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -249,6 +263,7 @@ export function OutstandingPO() {
     qtyOrderUnit: 'kg',
     qtyDelivered: '',
     qtyDeliveredUnit: 'kg',
+    refB: '',
   });
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -262,6 +277,7 @@ export function OutstandingPO() {
     uploadMutation.mutate(file, {
       onSuccess: (res) => {
         setImportErrors(res.errors ?? []);
+        setUploadSummary(res.summary ?? null);
         setExpandedPreviewDescs(new Set());
         if (res.data && res.data.length > 0) {
           setPreviewData(res.data);
@@ -273,6 +289,7 @@ export function OutstandingPO() {
       },
       onError: (error: any) => {
         setImportErrors([]);
+        setUploadSummary(null);
         alert(`Failed to upload file: ${error.message}`);
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
@@ -309,6 +326,7 @@ export function OutstandingPO() {
         alert('Data imported successfully!');
         setPreviewData([]);
         setImportErrors([]);
+        setUploadSummary(null);
         setPreviewSearchTerm('');
         setPreviewEditingIndex(null);
       },
@@ -328,12 +346,17 @@ export function OutstandingPO() {
       qtyOrderUnit: record.qtyOrderUnit,
       qtyDelivered: record.qtyDelivered.toString(),
       qtyDeliveredUnit: record.qtyDeliveredUnit,
+      refB: record.refB || '',
     });
   };
 
   const handlePreviewSaveEdit = (index: number) => {
     if (!previewEditForm.poNumber.trim() || !previewEditForm.supplierName || !previewEditForm.itemDesc || !previewEditForm.qtyOrder || !previewEditForm.qtyDelivered) {
       alert('Please fill all required fields (PO Number wajib diisi)');
+      return;
+    }
+    if (!matchesMtl(previewEditForm.refB)) {
+      alert(REF_B_MTL_MESSAGE);
       return;
     }
     const updatedData = [...previewData];
@@ -346,6 +369,7 @@ export function OutstandingPO() {
       qtyOrderUnit: previewEditForm.qtyOrderUnit,
       qtyDelivered: parseFloat(previewEditForm.qtyDelivered),
       qtyDeliveredUnit: previewEditForm.qtyDeliveredUnit,
+      refB: previewEditForm.refB.trim() || null,
     };
     setPreviewData(updatedData);
     setPreviewEditingIndex(null);
@@ -367,6 +391,11 @@ export function OutstandingPO() {
       return;
     }
 
+    if (!matchesMtl(manualForm.refB)) {
+      alert(REF_B_MTL_MESSAGE);
+      return;
+    }
+
     if (!targetPeriodId) {
       alert('Pilih periode dulu sebelum menambah data manual.');
       return;
@@ -381,6 +410,7 @@ export function OutstandingPO() {
       qtyOrderUnit: manualForm.qtyOrderUnit,
       qtyDelivered: parseFloat(manualForm.qtyDelivered),
       qtyDeliveredUnit: manualForm.qtyDeliveredUnit,
+      refB: manualForm.refB.trim() || null,
       periodId: targetPeriodId,
     }, {
       onSuccess: () => {
@@ -393,6 +423,7 @@ export function OutstandingPO() {
           qtyOrderUnit: 'kg',
           qtyDelivered: '',
           qtyDeliveredUnit: 'kg',
+          refB: '',
         });
         setIsManualOpen(false);
       },
@@ -413,12 +444,17 @@ export function OutstandingPO() {
       qtyOrderUnit: record.qtyOrderUnit,
       qtyDelivered: record.qtyDelivered.toString(),
       qtyDeliveredUnit: record.qtyDeliveredUnit,
+      refB: record.refB || '',
     });
   };
 
   const handleSaveEdit = (id: string) => {
     if (!editForm.poNumber.trim() || !editForm.planReceivedDate || !editForm.supplierName || !editForm.itemDesc || !editForm.qtyOrder || !editForm.qtyDelivered) {
       alert('Please fill all required fields (PO Number wajib diisi)');
+      return;
+    }
+    if (!matchesMtl(editForm.refB)) {
+      alert(REF_B_MTL_MESSAGE);
       return;
     }
 
@@ -433,6 +469,7 @@ export function OutstandingPO() {
         qtyOrderUnit: editForm.qtyOrderUnit,
         qtyDelivered: parseFloat(editForm.qtyDelivered),
         qtyDeliveredUnit: editForm.qtyDeliveredUnit,
+        refB: editForm.refB.trim() || null,
       }
     }, {
       onSuccess: () => setEditingId(null),
@@ -470,14 +507,15 @@ export function OutstandingPO() {
 
   const records = useMemo(() => poData ?? [], [poData]);
 
-  /** Pencarian mencakup nomor PO, item desc, dan supplier. */
+  /** Pencarian mencakup nomor PO, item desc, supplier, dan Ref-B. */
   const matchSearch = (record: PoRowLike, term: string) => {
     const q = term.trim().toLowerCase();
     if (!q) return true;
     return (
       (record.itemDesc || '').toLowerCase().includes(q) ||
       (record.supplierName || '').toLowerCase().includes(q) ||
-      (record.poNumber || '').toLowerCase().includes(q)
+      (record.poNumber || '').toLowerCase().includes(q) ||
+      (record.refB || '').toLowerCase().includes(q)
     );
   };
 
@@ -617,6 +655,33 @@ export function OutstandingPO() {
           <div className="px-5 py-4 border-b bg-amber-50/40 dark:bg-amber-500/5">
             <PeriodSelect value={targetPeriodId} onChange={setTargetPeriodId} className="max-w-md" />
           </div>
+          {uploadSummary && (
+            <div className="mx-5 mt-4 border border-emerald-200 dark:border-emerald-500/30 bg-emerald-50/60 dark:bg-emerald-500/5 rounded-lg px-4 py-3">
+              <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-300 mb-1">
+                Ringkasan file Outstanding PO
+              </p>
+              <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-foreground">
+                <span>
+                  Total baris di file: <strong>{uploadSummary.totalRows}</strong>
+                </span>
+                <span className="text-emerald-700 dark:text-emerald-400">
+                  Masuk (mengandung "MTL"): <strong>{uploadSummary.included}</strong>
+                </span>
+                <span className="text-amber-700 dark:text-amber-400">
+                  Dilewati (tidak mengandung "MTL"): <strong>{uploadSummary.skippedNoMtl}</strong>
+                </span>
+                {uploadSummary.failed > 0 && (
+                  <span className="text-destructive">
+                    Gagal: <strong>{uploadSummary.failed}</strong>
+                  </span>
+                )}
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Hanya baris dengan kolom <span className="font-semibold">PR Ref-B</span> mengandung
+                "MTL" yang bisa diimpor.
+              </p>
+            </div>
+          )}
           {importErrors.length > 0 && (
             <div className="mx-5 my-4 border border-destructive/40 bg-destructive/5 rounded-lg overflow-hidden">
               <div className="px-4 py-3 flex items-center gap-2 border-b border-destructive/20 bg-destructive/10">
@@ -647,6 +712,7 @@ export function OutstandingPO() {
                   <th className="px-6 py-4 font-semibold">PO Number</th>
                   <th className="px-6 py-4 font-semibold">Supplier</th>
                   <th className="px-6 py-4 font-semibold w-1/4">Item Desc</th>
+                  <th className="px-6 py-4 font-semibold">Ref-B</th>
                   <th className="px-6 py-4 font-semibold text-right">Qty Order</th>
                   <th className="px-6 py-4 font-semibold text-center">Unit</th>
                   <th className="px-6 py-4 font-semibold text-right">Qty Delivered</th>
@@ -656,7 +722,7 @@ export function OutstandingPO() {
               </thead>
               <tbody className="divide-y">
                 {previewGroups.length === 0 ? (
-                   <tr><td colSpan={9} className="px-6 py-8 text-center text-muted-foreground">No matching data found in preview.</td></tr>
+                   <tr><td colSpan={10} className="px-6 py-8 text-center text-muted-foreground">No matching data found in preview.</td></tr>
                 ) : previewGroups.map((group) => {
                   const isExpanded = expandedPreviewDescs.has(group.itemDesc);
                   return (
@@ -690,6 +756,7 @@ export function OutstandingPO() {
                             </span>
                           </div>
                         </td>
+                        <td className="px-6 py-3.5"><RefBSummary refs={group.refBs} /></td>
                         <td className="px-6 py-3.5"><UnitTotals totals={group.orderTotals} strong /></td>
                         <td className="px-6 py-3.5"><UnitTotals totals={group.orderTotals} unitOnly /></td>
                         <td className="px-6 py-3.5"><UnitTotals totals={group.deliveredTotals} strong /></td>
@@ -715,7 +782,8 @@ export function OutstandingPO() {
                               <>
                                 <td className="px-6 py-2.5"><input type="text" className="w-full h-8 px-2 border rounded text-xs font-mono" placeholder="PO Number" value={previewEditForm.poNumber} onChange={(e) => setPreviewEditForm({ ...previewEditForm, poNumber: e.target.value })} /></td>
                                 <td className="px-6 py-2.5"><input type="text" className="w-full h-8 px-2 border rounded text-xs" value={previewEditForm.supplierName} onChange={(e) => setPreviewEditForm({ ...previewEditForm, supplierName: e.target.value })} /></td>
-                                <td className="px-6 py-2.5"><input type="text" className="w-full h-8 px-2 border rounded text-xs" value={previewEditForm.itemDesc} onChange={(e) => setPreviewEditForm({ ...previewEditForm, itemDesc: e.target.value })} /></td>
+                                <td className="px-6 py-2.5"><input type="text" className="w-full h-8 px-2 border rounded text-xs" placeholder="Item Desc" value={previewEditForm.itemDesc} onChange={(e) => setPreviewEditForm({ ...previewEditForm, itemDesc: e.target.value })} /></td>
+                                <td className="px-6 py-2.5"><input type="text" className="w-full h-8 px-2 border rounded text-xs font-mono" placeholder="Ref-B (mis. MTL/...)" value={previewEditForm.refB} onChange={(e) => setPreviewEditForm({ ...previewEditForm, refB: e.target.value })} /></td>
                                 <td className="px-6 py-2.5"><input type="number" step="any" className="w-full h-8 px-2 border rounded text-xs text-right" value={previewEditForm.qtyOrder} onChange={(e) => setPreviewEditForm({ ...previewEditForm, qtyOrder: e.target.value })} /></td>
                                 <td className="px-6 py-2.5">
                                   <select className="w-full h-8 px-2 border rounded text-xs" value={previewEditForm.qtyOrderUnit} onChange={(e) => setPreviewEditForm({ ...previewEditForm, qtyOrderUnit: e.target.value })}>
@@ -752,6 +820,7 @@ export function OutstandingPO() {
                                     <span className="w-1.5 h-1.5 rounded-full bg-primary/60 shrink-0" title={group.itemDesc}></span>
                                   </div>
                                 </td>
+                                <td className="px-6 py-2.5"><RefBValue value={record.refB} /></td>
                                 <td className="px-6 py-2.5 text-right text-xs font-bold text-foreground tabular-nums">{fmtQty(record.qtyOrder)}</td>
                                 <td className="px-6 py-2.5 text-center">
                                   <span className="bg-secondary/60 text-secondary-foreground px-2 py-0.5 rounded text-[11px]">{record.qtyOrderUnit}</span>
@@ -808,6 +877,11 @@ export function OutstandingPO() {
                 <div className="space-y-1.5 md:col-span-3">
                   <label className="text-xs font-semibold text-muted-foreground uppercase">Item Desc</label>
                   <input type="text" className="w-full h-10 px-3 border rounded-md text-sm" placeholder="Item Description" value={manualForm.itemDesc} onChange={(e) => setManualForm({ ...manualForm, itemDesc: e.target.value })} required />
+                </div>
+                <div className="space-y-1.5 md:col-span-3">
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">Ref-B <span className="text-destructive">*</span></label>
+                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm font-mono" placeholder="mis. MTL/JUL 26/RP11.000" value={manualForm.refB} onChange={(e) => setManualForm({ ...manualForm, refB: e.target.value })} required />
+                  <p className="text-[11px] text-muted-foreground">Wajib mengandung "MTL".</p>
                 </div>
 
                 <div className="space-y-1.5 md:col-span-3">
@@ -950,6 +1024,7 @@ export function OutstandingPO() {
                     <th className="px-6 py-4 font-semibold">PO Number</th>
                     <th className="px-6 py-4 font-semibold">Supplier</th>
                     <th className="px-6 py-4 font-semibold w-1/4">Item Desc</th>
+                    <th className="px-6 py-4 font-semibold">Ref-B</th>
                     <th className="px-6 py-4 font-semibold text-right">Qty Order</th>
                     <th className="px-6 py-4 font-semibold text-center">Unit</th>
                     <th className="px-6 py-4 font-semibold text-right">Qty Delivered</th>
@@ -960,14 +1035,14 @@ export function OutstandingPO() {
                 <tbody className="divide-y">
                   {isLoading ? (
                     <tr>
-                      <td colSpan={10} className="px-6 py-12 text-center text-muted-foreground">
+                      <td colSpan={11} className="px-6 py-12 text-center text-muted-foreground">
                         <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" />
                         <p className="mt-2 text-sm font-medium">Memuat data...</p>
                       </td>
                     </tr>
                   ) : groupedByItem.length === 0 ? (
                     <tr>
-                      <td colSpan={10} className="px-6 py-12 text-center text-muted-foreground">
+                      <td colSpan={11} className="px-6 py-12 text-center text-muted-foreground">
                         <FileSpreadsheet className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
                         <p className="text-base font-semibold">Tidak ada data Outstanding PO</p>
                       </td>
@@ -1022,6 +1097,7 @@ export function OutstandingPO() {
                                 </span>
                               </div>
                             </td>
+                            <td className="px-6 py-3.5"><RefBSummary refs={group.refBs} /></td>
                             {/* Total dihitung PER SATUAN — kg dan rim tidak dijumlahkan */}
                             <td className="px-6 py-3.5"><UnitTotals totals={group.orderTotals} strong /></td>
                             <td className="px-6 py-3.5"><UnitTotals totals={group.orderTotals} unitOnly /></td>
@@ -1081,6 +1157,15 @@ export function OutstandingPO() {
                                         className="w-full h-8 px-2 border rounded text-xs bg-background"
                                         value={editForm.itemDesc}
                                         onChange={(e) => setEditForm({ ...editForm, itemDesc: e.target.value })}
+                                      />
+                                    </td>
+                                    <td className="px-6 py-2.5">
+                                      <input
+                                        type="text"
+                                        className="w-full h-8 px-2 border rounded text-xs bg-background font-mono"
+                                        placeholder="Ref-B (mis. MTL/...)"
+                                        value={editForm.refB}
+                                        onChange={(e) => setEditForm({ ...editForm, refB: e.target.value })}
                                       />
                                     </td>
                                     <td className="px-6 py-2.5">
@@ -1154,6 +1239,7 @@ export function OutstandingPO() {
                                         <span className="w-1.5 h-1.5 rounded-full bg-primary/60 shrink-0" title={group.itemDesc}></span>
                                       </div>
                                     </td>
+                                    <td className="px-6 py-2.5"><RefBValue value={record.refB} /></td>
                                     <td className="px-6 py-2.5 text-right text-xs font-bold text-foreground tabular-nums">
                                       {fmtQty(record.qtyOrder)}
                                     </td>

@@ -329,6 +329,10 @@ model StockRawMaterial {
   supplier  String?
   qty       Float
   unit      String
+  // Referensi customer/PO dari kolom Excel `Ref_B_PO`. Field SERAGAM untuk kedua
+  // jenis data (Stock Raw Material & Outstanding PO). Hanya baris yang nilainya
+  // mengandung "MTL" yang boleh masuk (lihat lib/excelRef.ts).
+  refB      String?
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -337,6 +341,7 @@ model StockRawMaterial {
   @@index([periodId])
   @@index([date])
   @@index([periodId, itemDesc, supplier])
+  @@index([periodId, refB])
   @@map("stock_raw_materials")
 }
 
@@ -357,6 +362,10 @@ model OutstandingPO {
   qtyOrderUnit     String // "kg", "rim", "sheets"
   qtyDelivered     Float
   qtyDeliveredUnit String // "kg", "rim", "sheets"
+  // Referensi customer/PO dari kolom Excel `PR Ref-B`. Field SERAGAM untuk kedua
+  // jenis data (Outstanding PO & Stock Raw Material). Hanya baris yang nilainya
+  // mengandung "MTL" yang boleh masuk (lihat lib/excelRef.ts).
+  refB             String?
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
@@ -366,6 +375,7 @@ model OutstandingPO {
   @@index([planReceivedDate])
   @@index([periodId, itemDesc, supplierName])
   @@index([periodId, poNumber])
+  @@index([periodId, refB])
   @@map("outstanding_pos")
 }
 

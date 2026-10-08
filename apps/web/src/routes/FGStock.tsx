@@ -62,7 +62,7 @@ export function FGStock() {
   const filteredStocks = stocks.filter(stock => {
     if (!searchQuery) return true;
     const lowerQuery = searchQuery.toLowerCase();
-    return stock.item.itemCode.toLowerCase().includes(lowerQuery) || 
+    return stock.item.partNumber.toLowerCase().includes(lowerQuery) || 
            stock.item.itemName.toLowerCase().includes(lowerQuery);
   });
 
@@ -387,7 +387,7 @@ export function FGStock() {
                         />
                       </td>
                     )}
-                    <td className="px-6 py-4 font-medium">{stock.item.itemCode}</td>
+                    <td className="px-6 py-4 font-medium">{stock.item.partNumber}</td>
                     <td className="px-6 py-4 text-right font-bold text-green-600 dark:text-green-500">{stock.quantity}</td>
                     <td className="px-6 py-4 text-xs">
                       {format(new Date(stock.date || stock.updatedAt), 'dd MMM yyyy')}
@@ -406,7 +406,7 @@ export function FGStock() {
                                 date: stock.date ? stock.date.split('T')[0] : new Date().toISOString().split('T')[0],
                                 quantity: stock.quantity,
                                 notes: stock.notes || '',
-                                itemCode: stock.item.itemCode,
+                                itemCode: stock.item.partNumber,
                                 itemName: stock.item.itemName,
                               }
                             })}

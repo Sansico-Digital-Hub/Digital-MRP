@@ -1044,7 +1044,12 @@ export function runMaterialCalculation(
       if (item.kgRemaining <= 1e-9 && item.sheetRemaining <= 1e-9) continue;
       const wi = Math.min(weekCount - 1, Math.max(0, item.availableWeek));
       outstandingPo[wi] += item.kgRemaining;
-      outstandingPoSheet[wi] += item.sheetRemaining;
+      // PO bersatuan kg tidak punya angka lembar. Konversi ke lembar memakai
+      // Kg/Lbr grup supaya baris `Outstanding PO` (dan `End Ind`) terisi di
+      // KEDUA satuan — sama seperti stok yang juga dikonversi lewat `groupFm`.
+      // Tanpa ini, PO 5.000 kg hanya masuk array kg sehingga baris tabel
+      // menampilkan "0 lbr / 0 kg" padahal PO-nya ada.
+      outstandingPoSheet[wi] += item.sheetRemaining + (groupFm > 0 ? item.kgRemaining / groupFm : 0);
       const no = String(item.poNumber || '').trim();
       if (no && !outstandingPoNumbers[wi].includes(no)) outstandingPoNumbers[wi].push(no);
     }

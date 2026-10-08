@@ -3,6 +3,7 @@ import prisma from '../lib/prisma';
 import { authenticate, requireRole } from '../middleware/auth';
 import { EDIT_ROLES } from '../lib/permissions';
 import { resolveUploadPeriod, recordPeriodChange, touchPeriod } from '../lib/periodScope';
+import { normalizeHeaderName, matchesMtl } from '../lib/excelRef';
 import * as xlsx from 'xlsx';
 
 // ============================================
@@ -171,11 +172,15 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
         itemDesc: -1,
         qtyOrder: -1,
         qtyDelivered: -1,
+        refB: -1,
       };
 
-      /** Cocokkan nama kolom tanpa peduli spasi/underscore, mis. "PO NO" == "PO_NO". */
-      const normalizeHeader = (value: unknown) =>
-        String(value || '').toUpperCase().replace(/[\s_]+/g, '').trim();
+      /**
+       * Cocokkan nama kolom tanpa peduli huruf besar/kecil, spasi di awal/akhir,
+       * serta pemisah spasi/underscore/hyphen (`lib/excelRef.ts`).
+       * Contoh: "PO NO" == "PO_NO" ; "PR Ref-B" == "pr ref-b".
+       */
+      const normalizeHeader = normalizeHeaderName;
 
       const HEADER_FIELDS: Record<string, keyof typeof colIdx> = {
         PONO: 'poNumber',
@@ -195,6 +200,11 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
         QTYORDER: 'qtyOrder',
         SUMOFDELIVEREDQTY: 'qtyDelivered',
         QTYDELIVERED: 'qtyDelivered',
+        // Referensi customer. Nama aslinya "PR Ref-B", tapi varian lain tetap diterima.
+        PRREFB: 'refB',
+        PRREF: 'refB',
+        REFB: 'refB',
+        REFBPO: 'refB',
       };
 
       // Find the headers
@@ -211,6 +221,7 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
           itemDesc: -1,
           qtyOrder: -1,
           qtyDelivered: -1,
+          refB: -1,
         };
         for (let j = 0; j < row.length; j++) {
           const field = HEADER_FIELDS[normalizeHeader(row[j])];
@@ -238,6 +249,18 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
         });
       }
 
+      // Kolom referensi customer WAJIB ada. Tanpa kolom ini filter "MTL" tidak
+      // bisa dijalankan, jadi proses DIHENTIKAN — jangan impor data tanpa filter.
+      if (colIdx.refB === -1) {
+        return reply.code(400).send({
+          error: 'Bad Request',
+          message:
+            'Kolom "PR Ref-B" tidak ditemukan di file Outstanding PO. ' +
+            'Kolom ini dipakai untuk memfilter data (hanya baris yang mengandung "MTL" yang diimpor), ' +
+            'sehingga proses dihentikan. Tambahkan kolom "PR Ref-B" lalu ulangi upload.',
+        });
+      }
+
       if (colIdx.itemDesc === -1 || colIdx.qtyOrder === -1) {
         return reply.code(400).send({
           error: 'Bad Request',
@@ -253,6 +276,8 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
       const recordsToInsert: Array<Record<string, unknown>> = [];
       const errors: Array<{ row: number; poNumber?: string; message: string }> = [];
       let skippedNonData = 0;
+      /** Baris yang dilewati karena kolom "PR Ref-B" tidak mengandung "MTL". */
+      let skippedNoMtl = 0;
 
       // Nilai berjalan untuk FILL-DOWN kolom pivot yang dikosongkan.
       let curPo = '';
@@ -299,6 +324,17 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
           if (unitRaw) curUnit = unitRaw;
         }
 
+        // ── FILTER "MTL" ───────────────────────────────────────────────────
+        // Hanya baris yang kolom "PR Ref-B"-nya mengandung "MTL" yang boleh
+        // masuk. Nilai kosong/null/NaN dianggap TIDAK mengandung MTL. Dibaca
+        // PER BARIS (tanpa fill-down) supaya baris tanpa referensi tidak ikut
+        // terbawa nilai baris di atasnya.
+        const refB = cellText(row[colIdx.refB]);
+        if (!matchesMtl(refB)) {
+          skippedNoMtl++;
+          continue;
+        }
+
         // Validasi dijalankan SETELAH fill-down: baris hanya gagal kalau
         // PO NO tetap kosong (tidak ada nilai di baris mana pun di atasnya).
         if (!curPo) {
@@ -331,31 +367,52 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
           qtyDelivered: parseExcelNumber(row[deliveredIdx]),
           // Satuan delivered mengikuti satuan order: kg -> kg, rim -> lembar.
           qtyDeliveredUnit: unit === 'rim' ? 'sheets' : unit,
+          refB,
         });
       }
+
+      // "Total baris di file" = semua baris data kandidat (itemDesc ada, bukan
+      // baris total). Baris kosong/subtotal dilaporkan terpisah.
+      const totalRows = recordsToInsert.length + errors.length + skippedNoMtl;
 
       if (recordsToInsert.length === 0) {
         return reply.code(400).send({
           error: 'Bad Request',
           message:
-            errors.length > 0
-              ? `Tidak ada baris yang bisa diimpor. ${errors.length} baris gagal — lihat daftar kesalahan.`
-              : 'No valid data found in Excel.',
+            skippedNoMtl > 0 && errors.length === 0
+              ? `Tidak ada baris yang mengandung "MTL" pada kolom "PR Ref-B". ` +
+                `${totalRows} baris data dibaca, semuanya dilewati.`
+              : errors.length > 0
+                ? `Tidak ada baris yang bisa diimpor. ${errors.length} baris gagal — lihat daftar kesalahan.`
+                : 'No valid data found in Excel.',
           errors,
+          summary: {
+            totalRows,
+            included: 0,
+            skippedNoMtl,
+            failed: errors.length,
+            skippedNonData,
+            total: totalRows + skippedNonData,
+            valid: 0,
+          },
         });
       }
 
       return reply.code(200).send({ 
         message:
           errors.length > 0
-            ? `File dibaca: ${recordsToInsert.length} baris siap diimpor, ${errors.length} baris gagal.`
-            : 'File parsed successfully',
+            ? `File dibaca: ${recordsToInsert.length} baris siap diimpor (mengandung "MTL"), ${skippedNoMtl} baris dilewati (tanpa "MTL"), ${errors.length} baris gagal.`
+            : `File dibaca: ${recordsToInsert.length} baris mengandung "MTL" siap diimpor, ${skippedNoMtl} baris dilewati (tidak mengandung "MTL").`,
         data: recordsToInsert,
         errors,
         summary: {
-          total: recordsToInsert.length + errors.length + skippedNonData,
-          valid: recordsToInsert.length,
+          totalRows,
+          included: recordsToInsert.length,
+          skippedNoMtl,
           failed: errors.length,
+          skippedNonData,
+          total: totalRows + skippedNonData,
+          valid: recordsToInsert.length,
         },
       });
     } catch (error) {
@@ -387,10 +444,26 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
     const { periodId } = resolved;
     const mode: 'add' | 'overwrite' = body.mode === 'add' ? 'add' : 'overwrite';
 
+    // ── FILTER "MTL" (penjaga kedua) ──────────────────────────────────────
+    // Parser Excel sudah menyaring baris tanpa "MTL", tapi endpoint import juga
+    // memeriksanya supaya tidak ada jalur yang bisa menyimpan data non-MTL
+    // (mis. kalau payload dikirim langsung).
+    const mtlRows = data.filter((record: any) => matchesMtl(record?.refB));
+    const skippedNoMtl = data.length - mtlRows.length;
+    if (mtlRows.length === 0) {
+      return reply.code(400).send({
+        error: 'Bad Request',
+        message:
+          'Tidak ada baris yang mengandung "MTL" pada kolom "PR Ref-B". ' +
+          'Semua data ditolak dan tidak ada yang disimpan.',
+        summary: { totalRows: data.length, included: 0, skippedNoMtl, failed: 0 },
+      });
+    }
+
     // PO Number WAJIB. Tolak seluruh permintaan kalau ada baris tanpa PO Number,
     // supaya tidak ada data yang tersimpan diam-diam tanpa nomor PO.
     const invalidRows: Array<{ row: number; message: string }> = [];
-    data.forEach((record: any, index: number) => {
+    mtlRows.forEach((record: any, index: number) => {
       const poNumber = String(record?.poNumber ?? '').trim();
       if (!poNumber) {
         invalidRows.push({
@@ -416,7 +489,7 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
             // HANYA periode ini yang dikosongkan.
             await tx.outstandingPO.deleteMany({ where: { periodId } });
           }
-          const recordsToInsert = data.map((record) => ({
+          const recordsToInsert = mtlRows.map((record: any) => ({
             periodId,
             poNumber: String(record.poNumber).trim(),
             planReceivedDate: new Date(record.planReceivedDate),
@@ -426,6 +499,7 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
             qtyOrderUnit: record.qtyOrderUnit,
             qtyDelivered: Number(record.qtyDelivered) || 0,
             qtyDeliveredUnit: record.qtyDeliveredUnit,
+            refB: record.refB ?? null,
           }));
           for (let i = 0; i < recordsToInsert.length; i += 1000) {
             await tx.outstandingPO.createMany({ data: recordsToInsert.slice(i, i + 1000) });
@@ -438,7 +512,7 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
         periodId,
         userId: request.user!.id,
         sourceType: 'OUTSTANDING_PO',
-        rowCount: data.length,
+        rowCount: mtlRows.length,
         replaced: previousCount,
         fileName: body.fileName ?? null,
         mode,
@@ -446,10 +520,14 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
 
       return reply.code(201).send({
         message:
-          mode === 'overwrite'
-            ? `Periode "${resolved.label}" ditimpa dengan ${data.length} baris PO.`
-            : `Ditambahkan ${data.length} baris PO ke periode "${resolved.label}".`,
-        count: data.length,
+          (mode === 'overwrite'
+            ? `Periode "${resolved.label}" ditimpa dengan ${mtlRows.length} baris PO.`
+            : `Ditambahkan ${mtlRows.length} baris PO ke periode "${resolved.label}".`) +
+          (skippedNoMtl > 0
+            ? ` ${skippedNoMtl} baris dilewati karena kolom "PR Ref-B" tidak mengandung "MTL".`
+            : ''),
+        count: mtlRows.length,
+        skippedNoMtl,
         periodId,
         label: resolved.label,
         replaced: previousCount,
@@ -464,13 +542,20 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
   // Add Manual — WAJIB menyertakan periode.
   server.post('/api/v1/outstanding-po', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
     const body = (request.body || {}) as any;
-    const { poNumber, planReceivedDate, supplierName, itemDesc, qtyOrder, qtyOrderUnit, qtyDelivered, qtyDeliveredUnit } = body;
+    const { poNumber, planReceivedDate, supplierName, itemDesc, qtyOrder, qtyOrderUnit, qtyDelivered, qtyDeliveredUnit, refB } = body;
 
     if (!String(poNumber ?? '').trim()) {
       return reply.code(400).send({ error: 'Bad Request', message: 'PO Number wajib diisi' });
     }
     if (!planReceivedDate || !supplierName || !itemDesc || qtyOrder === undefined || qtyDelivered === undefined) {
       return reply.code(400).send({ error: 'Bad Request', message: 'Required fields are missing' });
+    }
+    // Ref-B WAJIB dan harus mengandung "MTL" — aturan yang SAMA dengan import.
+    if (!matchesMtl(refB)) {
+      return reply.code(400).send({
+        error: 'Bad Request',
+        message: 'Kolom "PR Ref-B" wajib diisi dan harus mengandung "MTL".',
+      });
     }
 
     const resolved = await resolveUploadPeriod(body, request.user!.id);
@@ -489,6 +574,7 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
         qtyOrderUnit,
         qtyDelivered: parseFloat(qtyDelivered),
         qtyDeliveredUnit,
+        refB: String(refB).trim(),
       },
     });
 
@@ -499,7 +585,7 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
   // Update
   server.put('/api/v1/outstanding-po/:id', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { poNumber, planReceivedDate, supplierName, itemDesc, qtyOrder, qtyOrderUnit, qtyDelivered, qtyDeliveredUnit } = request.body as any;
+    const { poNumber, planReceivedDate, supplierName, itemDesc, qtyOrder, qtyOrderUnit, qtyDelivered, qtyDeliveredUnit, refB } = request.body as any;
 
     if (poNumber !== undefined && !String(poNumber).trim()) {
       return reply.code(400).send({ error: 'Bad Request', message: 'PO Number wajib diisi' });
@@ -508,6 +594,17 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
     const existing = await prisma.outstandingPO.findUnique({ where: { id } });
     if (!existing) {
       return reply.code(404).send({ error: 'Not Found', message: 'Record not found' });
+    }
+
+    // Kolom "PR Ref-B" juga divalidasi saat EDIT: nilai akhir (baru atau yang
+    // sudah tersimpan) WAJIB mengandung "MTL". Baris lama yang refB-nya masih
+    // kosong jadi harus dilengkapi saat diedit.
+    const effectiveRefB = refB !== undefined ? refB : existing.refB;
+    if (!matchesMtl(effectiveRefB)) {
+      return reply.code(400).send({
+        error: 'Bad Request',
+        message: 'Kolom "PR Ref-B" wajib diisi dan harus mengandung "MTL".',
+      });
     }
 
     const updated = await prisma.outstandingPO.update({
@@ -521,6 +618,7 @@ export default async function outstandingPoRoutes(server: FastifyInstance) {
         ...(qtyOrderUnit && { qtyOrderUnit }),
         ...(qtyDelivered !== undefined && { qtyDelivered: parseFloat(qtyDelivered) }),
         ...(qtyDeliveredUnit && { qtyDeliveredUnit }),
+        refB: String(effectiveRefB).trim(),
       },
     });
 

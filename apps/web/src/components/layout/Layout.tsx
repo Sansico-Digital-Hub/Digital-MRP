@@ -58,30 +58,10 @@ export function Layout() {
   const router = useRouter();
   const pathname = routerState.location.pathname;
 
-  const { user, logout, canView, canEdit, masterDataScope } = useAuthStore();
+  const { user, logout, canView, canEdit } = useAuthStore();
   const { activeModule, setActiveModule } = useNavigationStore();
   const [sidebarOpen, setSidebarOpen] = useState(true);
-
-  /**
-   * Scope Master Data milik role saat ini.
-   * - `production` (Production Planner) -> hanya item bertag Production
-   * - `material`   (Material Planner)   -> hanya item bertag Material
-   * - `all`        (Admin / Super Admin) -> semua
-   *
-   * Planner tidak boleh mengubah pilihan ini, jadi filternya DIKUNCI.
-   */
-  const mdScope = masterDataScope();
-
-  const [masterDataFilter, setMasterDataFilter] = useState<'all' | 'production' | 'material'>(
-    mdScope === 'all' ? 'all' : mdScope,
-  );
-
-  // Paksa filter mengikuti role begitu user/role diketahui (mis. setelah rehydrate).
-  useEffect(() => {
-    if (mdScope !== 'all' && masterDataFilter !== mdScope) {
-      setMasterDataFilter(mdScope);
-    }
-  }, [mdScope, masterDataFilter]);
+  const [masterDataFilter, setMasterDataFilter] = useState<'all' | 'production' | 'material'>('all');
 
   // Auto-switch active module based on current pathname
   useEffect(() => {
@@ -103,31 +83,19 @@ export function Layout() {
     router.navigate({ to: '/login' });
   };
 
-  /** Apakah item Master Data ini masuk dalam scope role? */
-  const masterDataScopedOut = (item: MenuItem): boolean => {
-    if (mdScope === 'all') return false;
-    if (mdScope === 'production') return !item.badge?.includes('Production');
-    return !item.badge?.includes('Material');
-  };
-
-  /** Filter dasar: feature flag + role menu biasa. */
-  const isItemVisible = (item: MenuItem) => {
-    if (item.feature && !isFeatureEnabled(item.feature)) return false;
-    if (item.superAdminOnly && user?.role !== 'SUPER_ADMIN') return false;
-    // Dropdown Management = System, hanya Admin & Super Admin.
-    if (item.adminOnly && user?.role !== 'SUPER_ADMIN' && user?.role !== 'ADMIN') return false;
-    return true;
-  };
-
   // Filter menu items based on roles and master data dropdown filter
   const currentMenuItems = SIDEBAR_MENUS[activeModule].filter(item => {
-    if (!isItemVisible(item)) return false;
+    if (item.feature && !isFeatureEnabled(item.feature)) return false;
+    if (item.superAdminOnly && user?.role !== 'SUPER_ADMIN') return false;
+    if (item.adminOnly && (user?.role !== 'SUPER_ADMIN' && user?.role !== 'PRODUCTION_PLANNER')) return false;
 
-    if (activeModule === 'masterdata') {
-      if (masterDataScopedOut(item)) return false;
-      if (masterDataFilter !== 'all' && !item.badge?.includes(
-        masterDataFilter === 'production' ? 'Production' : 'Material'
-      )) return false;
+    if (activeModule === 'masterdata' && masterDataFilter !== 'all') {
+      if (masterDataFilter === 'production') {
+        return item.badge?.includes('Production');
+      }
+      if (masterDataFilter === 'material') {
+        return item.badge?.includes('Material');
+      }
     }
 
     return true;
@@ -137,8 +105,9 @@ export function Layout() {
 
   const getVisibleMenuItems = (modId: ModuleName) => {
     return SIDEBAR_MENUS[modId].filter(item => {
-      if (!isItemVisible(item)) return false;
-      if (modId === 'masterdata' && masterDataScopedOut(item)) return false;
+      if (item.feature && !isFeatureEnabled(item.feature)) return false;
+      if (item.superAdminOnly && user?.role !== 'SUPER_ADMIN') return false;
+      if (item.adminOnly && (user?.role !== 'SUPER_ADMIN' && user?.role !== 'PRODUCTION_PLANNER')) return false;
       return true;
     });
   };
@@ -234,24 +203,15 @@ export function Layout() {
               <label className="text-[11px] text-muted-foreground font-semibold uppercase tracking-wider mb-1.5 block">
                 Filter Filter Data:
               </label>
-              {mdScope === 'all' ? (
-                <select
-                  value={masterDataFilter}
-                  onChange={(e) => setMasterDataFilter(e.target.value as 'all' | 'production' | 'material')}
-                  className="w-full text-xs font-medium bg-card border rounded-md px-2.5 py-1.5 shadow-sm focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
-                >
-                  <option value="all">🌐 All Master Data (Semua)</option>
-                  <option value="production">🏭 Production Data</option>
-                  <option value="material">📦 Material Data</option>
-                </select>
-              ) : (
-                <div className="w-full text-xs font-medium bg-secondary/60 border rounded-md px-2.5 py-1.5 text-muted-foreground flex items-center justify-between">
-                  <span>
-                    {mdScope === 'production' ? '🏭 Production Data' : '📦 Material Data'}
-                  </span>
-                  <span className="text-[10px] uppercase tracking-wider">Locked</span>
-                </div>
-              )}
+              <select
+                value={masterDataFilter}
+                onChange={(e) => setMasterDataFilter(e.target.value as 'all' | 'production' | 'material')}
+                className="w-full text-xs font-medium bg-card border rounded-md px-2.5 py-1.5 shadow-sm focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
+              >
+                <option value="all">🌐 All Master Data (Semua)</option>
+                <option value="production">🏭 Production Data</option>
+                <option value="material">📦 Material Data</option>
+              </select>
             </div>
           )}
 

@@ -1,8 +1,9 @@
 import { useEffect, useState, useRef, useMemo, Fragment } from 'react';
-import { useStockRawMaterial, useUploadStockRawMaterial, useAddManualStockRawMaterial, useUpdateStockRawMaterial, useDeleteStockRawMaterial, useBulkDeleteStockRawMaterial, useImportStockRawMaterial, type StockRawMaterialData } from '../hooks/useStockRawMaterial';
+import { useStockRawMaterial, useUploadStockRawMaterial, useAddManualStockRawMaterial, useUpdateStockRawMaterial, useDeleteStockRawMaterial, useBulkDeleteStockRawMaterial, useImportStockRawMaterial, type StockRawMaterialData, type StockRawMaterialUploadSummary } from '../hooks/useStockRawMaterial';
 import { FileSpreadsheet, Plus, Upload, Loader2, Search, Pencil, Trash2, X, Check, Save, Folder, ArrowLeft, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Lock, CalendarPlus } from 'lucide-react';
 import { usePeriods, useCreatePeriod, monthLabel } from '../hooks/usePeriods';
 import { PeriodSelect } from '../components/PeriodSelect';
+import { RefBSummary, RefBValue, matchesMtl, REF_B_MTL_MESSAGE } from '../components/RefB';
 import { format } from 'date-fns';
 
 // Satuan yang benar-benar dipakai data.
@@ -56,6 +57,8 @@ export function StockRawMaterial() {
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const [previewData, setPreviewData] = useState<Omit<StockRawMaterialData, 'id' | 'createdAt' | 'updatedAt'>[]>([]);
+  /** Ringkasan hasil pembacaan file (total/masuk MTL/dilewati). */
+  const [uploadSummary, setUploadSummary] = useState<StockRawMaterialUploadSummary | null>(null);
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [previewSearchTerm, setPreviewSearchTerm] = useState('');
   const [previewEditingIndex, setPreviewEditingIndex] = useState<number | null>(null);
@@ -64,6 +67,7 @@ export function StockRawMaterial() {
     supplier: '',
     qty: '',
     unit: '',
+    refB: '',
   });
 
   const [isManualOpen, setIsManualOpen] = useState(false);
@@ -73,6 +77,7 @@ export function StockRawMaterial() {
     date: format(new Date(), 'yyyy-MM-dd'),
     qty: '',
     unit: '',
+    refB: '',
   });
   
   const [editingId, setEditingId] = useState<string | null>(null);
@@ -82,6 +87,7 @@ export function StockRawMaterial() {
     date: '',
     qty: '',
     unit: '',
+    refB: '',
   });
 
   const [searchTerm, setSearchTerm] = useState('');
@@ -93,14 +99,17 @@ export function StockRawMaterial() {
 
     uploadMutation.mutate(file, {
       onSuccess: (res) => {
+        setUploadSummary(res.summary ?? null);
         if (res.data && res.data.length > 0) {
           setPreviewData(res.data);
         } else {
-          alert('No valid data found in file.');
+          setPreviewData([]);
+          alert(res.message || 'No valid data found in file.');
         }
         if (fileInputRef.current) fileInputRef.current.value = '';
       },
       onError: (error: any) => {
+        setUploadSummary(null);
         alert(`Failed to upload file: ${error.message}`);
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
@@ -130,6 +139,7 @@ export function StockRawMaterial() {
       onSuccess: () => {
         alert('Data imported successfully!');
         setPreviewData([]);
+        setUploadSummary(null);
         setPreviewSearchTerm('');
         setPreviewEditingIndex(null);
       },
@@ -146,12 +156,17 @@ export function StockRawMaterial() {
       supplier: record.supplier || '',
       qty: record.qty.toString(),
       unit: record.unit,
+      refB: record.refB || '',
     });
   };
 
   const handlePreviewSaveEdit = (index: number) => {
     if (!previewEditForm.itemDesc || !previewEditForm.qty || !previewEditForm.unit) {
       alert('Please fill all required fields');
+      return;
+    }
+    if (!matchesMtl(previewEditForm.refB)) {
+      alert(REF_B_MTL_MESSAGE);
       return;
     }
     const updatedData = [...previewData];
@@ -161,6 +176,7 @@ export function StockRawMaterial() {
       supplier: previewEditForm.supplier,
       qty: parseFloat(previewEditForm.qty),
       unit: previewEditForm.unit,
+      refB: previewEditForm.refB.trim() || null,
     };
     setPreviewData(updatedData);
     setPreviewEditingIndex(null);
@@ -182,6 +198,11 @@ export function StockRawMaterial() {
       return;
     }
 
+    if (!matchesMtl(manualForm.refB)) {
+      alert(REF_B_MTL_MESSAGE);
+      return;
+    }
+
     if (!targetPeriodId) {
       alert('Pilih periode dulu sebelum menambah data manual.');
       return;
@@ -193,6 +214,7 @@ export function StockRawMaterial() {
       date: manualForm.date,
       qty: parseFloat(manualForm.qty),
       unit: manualForm.unit,
+      refB: manualForm.refB.trim() || null,
       periodId: targetPeriodId,
     }, {
       onSuccess: () => {
@@ -202,6 +224,7 @@ export function StockRawMaterial() {
           date: format(new Date(), 'yyyy-MM-dd'),
           qty: '',
           unit: '',
+          refB: '',
         });
         setIsManualOpen(false);
       },
@@ -219,12 +242,18 @@ export function StockRawMaterial() {
       date: format(new Date(record.date), 'yyyy-MM-dd'),
       qty: record.qty.toString(),
       unit: record.unit,
+      refB: record.refB || '',
     });
   };
 
   const handleSaveEdit = (id: string) => {
     if (!editForm.itemDesc || !editForm.date || !editForm.qty || !editForm.unit) {
       alert('Please fill all required fields');
+      return;
+    }
+
+    if (!matchesMtl(editForm.refB)) {
+      alert(REF_B_MTL_MESSAGE);
       return;
     }
 
@@ -236,6 +265,7 @@ export function StockRawMaterial() {
         date: editForm.date,
         qty: parseFloat(editForm.qty),
         unit: editForm.unit,
+        refB: editForm.refB.trim() || null,
       }
     }, {
       onSuccess: () => setEditingId(null),
@@ -275,7 +305,8 @@ export function StockRawMaterial() {
 
   const filteredRecords = records.filter(record => 
     record.itemDesc.toLowerCase().includes(searchTerm.toLowerCase()) || 
-    (record.supplier && record.supplier.toLowerCase().includes(searchTerm.toLowerCase()))
+    (record.supplier && record.supplier.toLowerCase().includes(searchTerm.toLowerCase())) ||
+    (record.refB && record.refB.toLowerCase().includes(searchTerm.toLowerCase()))
   );
 
   const groupedByItem = useMemo(() => {
@@ -291,6 +322,8 @@ export function StockRawMaterial() {
       totals: { unit: string; qty: number; lots: number }[];
       /** Satuan yang tidak dikenali; angkanya tetap ditampilkan apa adanya. */
       unknownUnits: string[];
+      /** Referensi customer unik di grup ini (kolom `Ref_B_PO`). */
+      refBs: string[];
       items: StockRawMaterialData[];
     }> = {};
 
@@ -306,10 +339,14 @@ export function StockRawMaterial() {
           suppliers: record.supplier || '',
           totals: [],
           unknownUnits: [],
+          refBs: [],
           items: [],
         };
       }
       groups[groupKey].items.push(record);
+
+      const ref = (record.refB || '').trim();
+      if (ref && !groups[groupKey].refBs.includes(ref)) groups[groupKey].refBs.push(ref);
 
       // Akumulasi per satuan (tidak dicampur).
       const label = unitLabel(record.unit);
@@ -372,7 +409,8 @@ export function StockRawMaterial() {
 
   const filteredPreviewData = previewData.filter(record => 
     record.itemDesc.toLowerCase().includes(previewSearchTerm.toLowerCase()) ||
-    (record.supplier && record.supplier.toLowerCase().includes(previewSearchTerm.toLowerCase()))
+    (record.supplier && record.supplier.toLowerCase().includes(previewSearchTerm.toLowerCase())) ||
+    (record.refB && record.refB.toLowerCase().includes(previewSearchTerm.toLowerCase()))
   );
 
   return (
@@ -437,20 +475,43 @@ export function StockRawMaterial() {
           <div className="px-5 py-4 border-b bg-amber-50/40 dark:bg-amber-500/5">
             <PeriodSelect value={targetPeriodId} onChange={setTargetPeriodId} className="max-w-md" />
           </div>
+          {uploadSummary && (
+            <div className="mx-5 mt-4 border border-emerald-200 dark:border-emerald-500/30 bg-emerald-50/60 dark:bg-emerald-500/5 rounded-lg px-4 py-3">
+              <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-300 mb-1">
+                Ringkasan file Stock Raw Material
+              </p>
+              <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-foreground">
+                <span>
+                  Total baris di file: <strong>{uploadSummary.totalRows}</strong>
+                </span>
+                <span className="text-emerald-700 dark:text-emerald-400">
+                  Masuk (mengandung "MTL"): <strong>{uploadSummary.included}</strong>
+                </span>
+                <span className="text-amber-700 dark:text-amber-400">
+                  Dilewati (tidak mengandung "MTL"): <strong>{uploadSummary.skippedNoMtl}</strong>
+                </span>
+              </div>
+              <p className="text-[11px] text-muted-foreground mt-1">
+                Hanya baris dengan kolom <span className="font-semibold">Ref_B_PO</span> mengandung
+                "MTL" yang bisa diimpor.
+              </p>
+            </div>
+          )}
           <div className="max-h-[60vh] overflow-auto">
             <table className="w-full text-sm text-left">
               <thead className="text-xs text-muted-foreground uppercase bg-secondary/50 sticky top-0 z-10 shadow-sm">
                 <tr>
                   <th className="px-6 py-4 font-semibold w-1/3">Item Desc</th>
-                  <th className="px-6 py-4 font-semibold">Supplier</th>
-                  <th className="px-6 py-4 font-semibold text-right">Qty</th>
-                  <th className="px-6 py-4 font-semibold text-center">Unit</th>
-                  <th className="px-6 py-4 font-semibold text-right">Aksi</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y">
-                {filteredPreviewData.length === 0 ? (
-                   <tr><td colSpan={5} className="px-6 py-8 text-center text-muted-foreground">No matching data found in preview.</td></tr>
+                    <th className="px-6 py-4 font-semibold">Ref-B</th>
+                    <th className="px-6 py-4 font-semibold">Supplier</th>
+                    <th className="px-6 py-4 font-semibold text-right">Qty</th>
+                    <th className="px-6 py-4 font-semibold text-center">Unit</th>
+                    <th className="px-6 py-4 font-semibold text-right">Aksi</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y">
+                  {filteredPreviewData.length === 0 ? (
+                     <tr><td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">No matching data found in preview.</td></tr>
                 ) : filteredPreviewData.map((record) => {
                   const originalIndex = previewData.indexOf(record);
                   return (
@@ -458,6 +519,7 @@ export function StockRawMaterial() {
                       {previewEditingIndex === originalIndex ? (
                         <>
                           <td className="px-6 py-3"><input type="text" className="w-full h-8 px-2 border rounded text-sm" value={previewEditForm.itemDesc} onChange={(e) => setPreviewEditForm({ ...previewEditForm, itemDesc: e.target.value })} /></td>
+                          <td className="px-6 py-3"><input type="text" className="w-full h-8 px-2 border rounded text-sm font-mono" placeholder="Ref-B (mis. MTL/...)" value={previewEditForm.refB} onChange={(e) => setPreviewEditForm({ ...previewEditForm, refB: e.target.value })} /></td>
                           <td className="px-6 py-3"><input type="text" className="w-full h-8 px-2 border rounded text-sm" value={previewEditForm.supplier} onChange={(e) => setPreviewEditForm({ ...previewEditForm, supplier: e.target.value })} /></td>
                           <td className="px-6 py-3"><input type="number" step="any" className="w-full h-8 px-2 border rounded text-sm text-right" value={previewEditForm.qty} onChange={(e) => setPreviewEditForm({ ...previewEditForm, qty: e.target.value })} /></td>
                           <td className="px-6 py-3">
@@ -475,6 +537,7 @@ export function StockRawMaterial() {
                       ) : (
                         <>
                           <td className="px-6 py-3 font-semibold text-foreground">{record.itemDesc}</td>
+                          <td className="px-6 py-3"><RefBValue value={record.refB} /></td>
                           <td className="px-6 py-3">{record.supplier}</td>
                           <td className="px-6 py-3 text-right font-bold">{record.qty}</td>
                           <td className="px-6 py-3 text-center"><span className="bg-primary/10 text-primary px-2.5 py-1 rounded text-xs">{record.unit}</span></td>
@@ -525,6 +588,11 @@ export function StockRawMaterial() {
                 <div className="space-y-1.5 md:col-span-1">
                   <label className="text-xs font-semibold text-muted-foreground uppercase">Unit</label>
                   <input type="text" className="w-full h-10 px-3 border rounded-md text-sm" placeholder="Unit" value={manualForm.unit} onChange={(e) => setManualForm({ ...manualForm, unit: e.target.value })} required />
+                </div>
+                <div className="space-y-1.5 md:col-span-2">
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">Ref-B <span className="text-destructive">*</span></label>
+                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm font-mono" placeholder="mis. MTL/JUL 26/RP11.000" value={manualForm.refB} onChange={(e) => setManualForm({ ...manualForm, refB: e.target.value })} required />
+                  <p className="text-[11px] text-muted-foreground">Wajib mengandung "MTL".</p>
                 </div>
                 <div className="flex gap-2 md:col-span-6 justify-end mt-2">
                   <button type="button" onClick={() => setIsManualOpen(false)} className="h-10 px-4 bg-muted text-muted-foreground rounded-md font-medium text-sm">Cancel</button>
@@ -638,6 +706,7 @@ export function StockRawMaterial() {
                       <input type="checkbox" className="rounded border-gray-300 w-4 h-4" checked={filteredRecords.length > 0 && selectedIds.length === filteredRecords.length} onChange={handleSelectAll} />
                     </th>
                     <th className="px-6 py-4 font-semibold">Item Desc</th>
+                    <th className="px-6 py-4 font-semibold">Ref-B</th>
                     <th className="px-6 py-4 font-semibold">Supplier</th>
                     <th className="px-6 py-4 font-semibold">Date</th>
                     <th className="px-6 py-4 font-semibold text-right">Qty</th>
@@ -648,14 +717,14 @@ export function StockRawMaterial() {
                 <tbody className="divide-y">
                   {isLoading ? (
                     <tr>
-                      <td colSpan={7} className="px-6 py-12 text-center text-muted-foreground">
+                      <td colSpan={8} className="px-6 py-12 text-center text-muted-foreground">
                         <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" />
                         <p className="mt-2 text-sm font-medium">Memuat data...</p>
                       </td>
                     </tr>
                   ) : groupedByItem.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-6 py-12 text-center text-muted-foreground">
+                      <td colSpan={8} className="px-6 py-12 text-center text-muted-foreground">
                         <FileSpreadsheet className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
                         <p className="text-base font-semibold">Tidak ada data Stock Raw Material</p>
                       </td>
@@ -703,6 +772,7 @@ export function StockRawMaterial() {
                                 </span>
                               </div>
                             </td>
+                            <td className="px-6 py-3.5"><RefBSummary refs={group.refBs} /></td>
                             <td className="px-6 py-3.5 text-muted-foreground text-xs">{group.suppliers || '-'}</td>
                             <td className="px-6 py-3.5 text-muted-foreground text-xs font-medium">
                               {group.items.length === 1
@@ -786,6 +856,15 @@ export function StockRawMaterial() {
                                     <td className="px-6 py-2.5">
                                       <input
                                         type="text"
+                                        className="w-full h-8 px-2 border rounded text-xs bg-background font-mono"
+                                        placeholder="Ref-B (mis. MTL/...)"
+                                        value={editForm.refB}
+                                        onChange={(e) => setEditForm({ ...editForm, refB: e.target.value })}
+                                      />
+                                    </td>
+                                    <td className="px-6 py-2.5">
+                                      <input
+                                        type="text"
                                         className="w-full h-8 px-2 border rounded text-xs bg-background"
                                         value={editForm.supplier}
                                         onChange={(e) => setEditForm({ ...editForm, supplier: e.target.value })}
@@ -842,6 +921,7 @@ export function StockRawMaterial() {
                                         <span>Lot #{idx + 1}</span>
                                       </div>
                                     </td>
+                                    <td className="px-6 py-2.5"><RefBValue value={record.refB} /></td>
                                     <td className="px-6 py-2.5 text-xs text-muted-foreground">{record.supplier || '-'}</td>
                                     <td className="px-6 py-2.5 text-xs font-medium text-foreground">
                                       {format(new Date(record.date), 'dd MMM yyyy')}

@@ -238,6 +238,11 @@ async function main() {
   // PO 100 kg dengan planReceivedDate 2026-10-01 -> 12 hari dari awal periode -> minggu ke-2
   check('matriks: PO belum masuk di minggu 1', matrix.summary.outstandingPo[0], 0);
   check('matriks: PO masuk di minggu kedatangannya (minggu 2)', matrix.summary.outstandingPo[1], 100);
+  // PO bersatuan kg TIDAK punya angka lembar, jadi dikonversi ke lembar lewat
+  // Kg/Lbr grup. Tanpa ini baris "Outstanding PO" tampil "0 lbr / 0 kg"
+  // padahal PO-nya ada (kasus nyata: PO L1G001066 = 5.000 kg).
+  check('matriks: PO kg dikonversi ke lembar (100 kg / 0,5 = 200 lbr)', matrix.summary.outstandingPoSheet[1], 200);
+  check('matriks: PO kg tetap kosong di minggu lain', matrix.summary.outstandingPoSheet[0], 0);
   check('matriks: nomor PO muncul di minggu kedatangan', matrix.summary.outstandingPoNumbers[1], ['PO-TEST-1']);
   check('matriks: minggu tanpa PO kosong', matrix.summary.outstandingPoNumbers[0], []);
   check(

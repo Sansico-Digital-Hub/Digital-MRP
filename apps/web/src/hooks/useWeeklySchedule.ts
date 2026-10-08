@@ -18,12 +18,32 @@ export interface WeeklyScheduleRecord {
   >;
 }
 
+export interface WeeklyScheduleWeekColumn {
+  weekNumber: number;
+  weekStartDate: string;
+  weekEndDate: string;
+}
+
+export interface WeeklyScheduleSummaryResponse {
+  data: WeeklyScheduleRecord[];
+  year: number;
+  moduleType: DataModule;
+  /**
+   * Kalender kolom minggu (W1..W26) dari DATA yang diupload — bukan dari tanggal
+   * hari ini. Dipakai halaman 26-Week Demand Plan untuk header kolom supaya
+   * W1 selalu = minggu pertama file import dan minggu tanpa demand tetap tampil.
+   */
+  weeks?: WeeklyScheduleWeekColumn[];
+  /** Tanggal mulai W1 (ISO). null bila periode belum punya data MRP. */
+  periodStart?: string | null;
+}
+
 /**
  * Ringkasan MRP untuk SATU periode + SATU modul. `periodId` dan `moduleType`
  * wajib — tanpa itu demand antar bulan / antar modul akan tercampur.
  */
 export function useWeeklyScheduleSummary(periodId?: string | null, moduleType: DataModule = 'PRODUCTION') {
-  return useQuery<{ data: WeeklyScheduleRecord[]; year: number; moduleType: DataModule }, Error>({
+  return useQuery<WeeklyScheduleSummaryResponse, Error>({
     queryKey: ['weeklySchedule', 'summary', periodId, moduleType],
     enabled: Boolean(periodId),
     queryFn: () =>

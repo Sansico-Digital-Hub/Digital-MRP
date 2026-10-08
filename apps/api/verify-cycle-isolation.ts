@@ -34,6 +34,9 @@ import { PrismaClient } from '@prisma/client';
 // Tes ini memakai modul MATERIAL karena hasil perhitungan yang dibandingkan
 // adalah hasil Material Calculation.
 //
+// Sejak 2026-10-01 STOCK_RM & OUTSTANDING_PO juga wajib punya `refB` yang
+// mengandung "MTL" — baris tanpa MTL ditolak import.
+//
 // Fixture dibuat SINTETIS (3 part x 4 minggu) supaya tes ini jalan juga di
 // database kosong dan tidak bergantung pada data produksi. Item uji dibuat
 // kalau belum ada, lalu dihapus lagi di akhir.
@@ -284,6 +287,8 @@ async function main() {
       qty: 1000,
       unit: 'kg',
       date: weekStart(1),
+      // Import menolak baris tanpa "MTL" pada refB (filter wajib).
+      refB: 'MTL/TEST/ISO',
     },
   ];
 
@@ -297,6 +302,8 @@ async function main() {
       qtyDelivered: 0,
       qtyDeliveredUnit: 'kg',
       planReceivedDate: weekStart(2),
+      // Import menolak baris tanpa "MTL" pada refB (filter wajib).
+      refB: 'MTL/TEST/ISO',
     },
   ];
 

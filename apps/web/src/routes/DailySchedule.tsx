@@ -451,7 +451,7 @@ export function DailySchedule() {
       if (filterShift && s.shift !== Number(filterShift)) return false;
       if (!searchQuery) return true;
       const q = searchQuery.toLowerCase();
-            return s.item.itemCode.toLowerCase().includes(q) ||
+            return s.item.partNumber.toLowerCase().includes(q) ||
               s.item.itemName.toLowerCase().includes(q) ||
              (s.toyName && s.toyName.toLowerCase().includes(q)) ||
              (s.masterCarton && s.masterCarton.toLowerCase().includes(q)) ||
@@ -468,12 +468,12 @@ export function DailySchedule() {
     const groups: Record<string, any> = {};
     for (const schedule of filteredSchedules) {
       const dateStr = typeof schedule.date === 'string' ? schedule.date.split('T')[0] : new Date(schedule.date).toISOString().split('T')[0];
-      const key = `${dateStr}_${schedule.item.itemCode}_${schedule.masterCarton || ''}`;
+      const key = `${dateStr}_${schedule.item.partNumber}_${schedule.masterCarton || ''}`;
       if (!groups[key]) {
         groups[key] = {
           id: key,
           date: dateStr,
-          partNumber: schedule.item.itemCode,
+          partNumber: schedule.item.partNumber,
           toyName: schedule.toyName || schedule.item.itemName,
           masterCarton: schedule.masterCarton || '-',
           shift1: { id: null, quantity: 0 },

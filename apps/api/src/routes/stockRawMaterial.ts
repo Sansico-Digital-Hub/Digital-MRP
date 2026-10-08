@@ -1,9 +1,9 @@
 ﻿import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import { config } from '../config';
-import { authenticate, requireRole } from '../middleware/auth';
-import { EDIT_ROLES } from '../lib/permissions';
+import { authenticate } from '../middleware/auth';
 import { resolveUploadPeriod, recordPeriodChange, touchPeriod } from '../lib/periodScope';
+import { normalizeHeaderName, matchesMtl } from '../lib/excelRef';
 import * as xlsx from 'xlsx';
 
 export default async function stockRawMaterialRoutes(server: FastifyInstance) {
@@ -157,7 +157,7 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
   });
 
   // Upload Excel
-  server.post('/api/v1/stock-raw-material/upload', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
+  server.post('/api/v1/stock-raw-material/upload', { preValidation: [authenticate] }, async (request, reply) => {
     try {
       const data = await request.file();
       if (!data) {
@@ -166,45 +166,135 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
 
       const buffer = await data.toBuffer();
       const workbook = xlsx.read(buffer, { type: 'buffer' });
-      
-      const sheetName = 'StockOnhandByLot';
-      if (!workbook.Sheets[sheetName]) {
-        return reply.code(400).send({ error: 'Bad Request', message: 'Sheet "StockOnhandByLot" not found in the Excel file' });
-      }
-      const sheet = workbook.Sheets[sheetName];
-      
-      const rows = xlsx.utils.sheet_to_json(sheet, { header: 1 }) as any[][];
-      
-      let namaItemIdx = -1;
-      let trxDateIdx = -1;
-      let digit1LotIdx = -1;
-      let totalIdx = -1;
-      let unitIdx = -1;
+
+      /**
+       * Pencocokan header TIDAK peduli huruf besar/kecil, spasi di awal/akhir,
+       * serta pemisah spasi/underscore/hyphen (`lib/excelRef.ts`).
+       * Contoh: "Ref_B_PO" == "ref_b_po" == " Ref_B_PO " == "Ref B PO".
+       *
+       * PENTING: nama sheet TIDAK di-hardcode lagi. Nama sheet hasil ekspor ERP
+       * bisa berbeda antar file, jadi sheet dipilih dengan mencari baris HEADER
+       * DATA STOK di seluruh sheet.
+       */
+      type StockCols = {
+        namaItem: number;
+        trxDate: number;
+        digit1Lot: number;
+        total: number;
+        unit: number;
+        refB: number;
+      };
+
+      const STOCK_HEADER_FIELDS: Record<string, keyof StockCols> = {
+        NAMAITEM: 'namaItem',
+        ITEMNAME: 'namaItem',
+        ITEMDESC: 'namaItem',
+        TRXDATE: 'trxDate',
+        TANGGAL: 'trxDate',
+        DIGIT1LOT: 'digit1Lot',
+        DIGITLOT: 'digit1Lot',
+        TOTAL: 'total',
+        QTY: 'total',
+        UNIT: 'unit',
+        SATUAN: 'unit',
+        // Referensi customer. Nama aslinya "Ref_B_PO", varian lain tetap diterima.
+        REFBPO: 'refB',
+        REFB: 'refB',
+      };
+
+      /** Baris header dengan kolom dikenali terbanyak di SATU sheet. */
+      const scanSheet = (sheetRows: unknown[][]) => {
+        let best: { rowIdx: number; cols: StockCols; headers: string[] } | null = null;
+        let bestScore = 0;
+        for (let i = 0; i < Math.min(25, sheetRows.length); i++) {
+          const row = sheetRows[i];
+          if (!row) continue;
+
+          const cols: StockCols = { namaItem: -1, trxDate: -1, digit1Lot: -1, total: -1, unit: -1, refB: -1 };
+          for (let j = 0; j < row.length; j++) {
+            const field = STOCK_HEADER_FIELDS[normalizeHeaderName(row[j])];
+            if (field && cols[field] === -1) cols[field] = j;
+          }
+
+          const score = Object.values(cols).filter((v) => v !== -1).length;
+          if (score > bestScore) {
+            bestScore = score;
+            best = {
+              rowIdx: i,
+              cols,
+              headers: row.map((c) => String(c ?? '').trim()).filter(Boolean),
+            };
+          }
+        }
+        return best;
+      };
+
+      const coreCount = (c: StockCols) =>
+        [c.namaItem, c.trxDate, c.digit1Lot, c.total, c.unit].filter((v) => v !== -1).length;
+
+      let sheetName = '';
+      let rows: unknown[][] = [];
       let headerRowIdx = -1;
+      let scan: { rowIdx: number; cols: StockCols; headers: string[] } | null = null;
+      const sheetReport: string[] = [];
+      let closest: { sheetName: string; headers: string[]; core: number } | null = null;
 
-      // Find the headers
-      for (let i = 0; i < Math.min(20, rows.length); i++) {
-        const row = rows[i];
-        if (!row) continue;
-        
-        for (let j = 0; j < row.length; j++) {
-          const cell = String(row[j] || '').trim();
-          
-          if (cell === 'Nama Item') namaItemIdx = j;
-          else if (cell === 'Trx Date') trxDateIdx = j;
-          else if (cell === 'Digit1_Lot') digit1LotIdx = j;
-          else if (cell === 'Total') totalIdx = j;
-          else if (cell === 'Unit') unitIdx = j;
+      for (const name of workbook.SheetNames) {
+        const candidateSheet = workbook.Sheets[name];
+        const candidateRows = xlsx.utils.sheet_to_json(candidateSheet, { header: 1 }) as unknown[][];
+        const found = scanSheet(candidateRows);
+        const core = found ? coreCount(found.cols) : 0;
+        sheetReport.push(`${name} (${core}/5 kolom inti)`);
+        if (found && (!closest || core > closest.core)) {
+          closest = { sheetName: name, headers: found.headers, core };
         }
-        
-        if (namaItemIdx !== -1 && trxDateIdx !== -1 && digit1LotIdx !== -1 && totalIdx !== -1 && unitIdx !== -1) {
-          headerRowIdx = i;
-          break; // Found all headers
+        if (found && core === 5) {
+          sheetName = name;
+          rows = candidateRows;
+          headerRowIdx = found.rowIdx;
+          scan = found;
+          break;
         }
       }
 
-      if (headerRowIdx === -1) {
-        return reply.code(400).send({ error: 'Bad Request', message: 'Could not find required columns in the file.' });
+      if (!scan) {
+        return reply.code(400).send({
+          error: 'Bad Request',
+          message:
+            'Tidak menemukan sheet data stok di file ini. Kolom yang wajib ada: ' +
+            '"Nama Item", "Trx Date", "Digit1_Lot", "Unit", "Total", dan "Ref_B_PO". ' +
+            `Sheet yang diperiksa: ${sheetReport.join('; ')}.` +
+            (closest
+              ? ` Header terdekat ada di sheet "${closest.sheetName}": ${closest.headers.slice(0, 15).join(', ')}.`
+              : ''),
+        });
+      }
+
+      const {
+        namaItem: namaItemIdx,
+        trxDate: trxDateIdx,
+        digit1Lot: digit1LotIdx,
+        total: totalIdx,
+        unit: unitIdx,
+        refB: refBPOIdx,
+      } = scan.cols;
+
+      // Kolom referensi customer WAJIB ada. Tanpa kolom ini filter "MTL" tidak
+      // bisa dijalankan, jadi proses DIHENTIKAN — jangan impor data tanpa filter.
+      if (refBPOIdx === -1) {
+        const headerText = (rows[headerRowIdx] || [])
+          .map((c) => String(c ?? '').trim())
+          .filter(Boolean)
+          .slice(0, 15)
+          .join(', ');
+        return reply.code(400).send({
+          error: 'Bad Request',
+          message:
+            `Kolom "Ref_B_PO" tidak ditemukan di sheet "${sheetName}". ` +
+            'Kolom ini dipakai untuk memfilter data (hanya baris yang mengandung "MTL" yang diimpor), ' +
+            'sehingga proses dihentikan. Tambahkan kolom "Ref_B_PO" lalu ulangi upload. ' +
+            `Header yang terbaca: ${headerText}.`,
+        });
       }
 
       const recordsToInsert = [];
@@ -236,10 +326,17 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
 
       let currentItemDesc = '';
       let currentDate = new Date();
+      /** Baris yang dilewati karena kolom "Ref_B_PO" tidak mengandung "MTL". */
+      let skippedNoMtl = 0;
+      /** Baris kosong / baris TOTAL / baris tanpa nilai angka. */
+      let skippedNonData = 0;
 
       for (let i = headerRowIdx + 1; i < rows.length; i++) {
         const row = rows[i];
-        if (!row || row.length === 0) continue;
+        if (!row || row.length === 0) {
+          skippedNonData++;
+          continue;
+        }
 
         const rawItem = row[namaItemIdx];
         if (rawItem !== undefined && rawItem !== null && String(rawItem).trim() !== '') {
@@ -247,6 +344,7 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
         }
 
         if (!currentItemDesc || currentItemDesc.toUpperCase().includes('TOTAL')) {
+          skippedNonData++;
           continue;
         }
 
@@ -259,27 +357,61 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
         const totalRaw = String(row[totalIdx] || '').replace(/,/g, '').trim();
         const unit = String(row[unitIdx] || '').trim();
 
-        if (totalRaw !== '' && !isNaN(parseFloat(totalRaw))) {
-          const qty = parseFloat(totalRaw);
-          const supplier = getSupplierName(digit1Lot);
-
-          recordsToInsert.push({
-            itemDesc: currentItemDesc,
-            date: currentDate,
-            supplier,
-            qty,
-            unit,
-          });
+        if (totalRaw === '' || isNaN(parseFloat(totalRaw))) {
+          skippedNonData++;
+          continue;
         }
+
+        // Nilai referensi dibaca PER BARIS dari kolom "Ref_B_PO" (tanpa
+        // fill-down) supaya baris tanpa referensi tidak ikut terbawa nilai
+        // baris di atasnya. Nilai kosong/NaN dianggap tidak mengandung MTL.
+        const refB = String(row[refBPOIdx] ?? '').trim();
+        if (!matchesMtl(refB)) {
+          skippedNoMtl++;
+          continue;
+        }
+
+        const qty = parseFloat(totalRaw);
+        const supplier = getSupplierName(digit1Lot);
+
+        recordsToInsert.push({
+          itemDesc: currentItemDesc,
+          date: currentDate,
+          supplier,
+          qty,
+          unit,
+          refB,
+        });
       }
 
+      // "Total baris di file" = semua baris data kandidat (punya nilai angka).
+      const totalRows = recordsToInsert.length + skippedNoMtl;
+      const summary = {
+        totalRows,
+        included: recordsToInsert.length,
+        skippedNoMtl,
+        failed: 0,
+        skippedNonData,
+        total: totalRows + skippedNonData,
+        valid: recordsToInsert.length,
+      };
+
       if (recordsToInsert.length === 0) {
-        return reply.code(400).send({ error: 'Bad Request', message: 'No valid data found in Excel.' });
+        return reply.code(400).send({
+          error: 'Bad Request',
+          message:
+            skippedNoMtl > 0
+              ? `Tidak ada baris yang mengandung "MTL" pada kolom "Ref_B_PO". ` +
+                `${totalRows} baris data dibaca, semuanya dilewati.`
+              : 'No valid data found in Excel.',
+          summary,
+        });
       }
 
       return reply.code(200).send({ 
-        message: 'File parsed successfully',
-        data: recordsToInsert
+        message: `File dibaca: ${recordsToInsert.length} baris mengandung "MTL" siap diimpor, ${skippedNoMtl} baris dilewati (tidak mengandung "MTL").`,
+        data: recordsToInsert,
+        summary,
       });
     } catch (error) {
       server.log.error(error);
@@ -288,9 +420,9 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
   });
 
   // Import (Save) dengan mode Add atau Overwrite — WAJIB menyertakan periode.
-  server.post('/api/v1/stock-raw-material/import', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
+  server.post('/api/v1/stock-raw-material/import', { preValidation: [authenticate] }, async (request, reply) => {
     const body = (request.body || {}) as {
-      data?: { itemDesc: string; supplier: string; qty: number; unit: string; date: string | Date }[];
+      data?: { itemDesc: string; supplier: string; qty: number; unit: string; date: string | Date; refB?: string | null }[];
       mode?: 'add' | 'overwrite';
       periodId?: string;
       periodMonth?: string;
@@ -310,16 +442,32 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
     const { periodId } = resolved;
     const mode: 'add' | 'overwrite' = body.mode === 'add' ? 'add' : 'overwrite';
 
+    // ── FILTER "MTL" (penjaga kedua) ──────────────────────────────────────
+    // Parser Excel sudah menyaring baris tanpa "MTL", tapi endpoint import juga
+    // memeriksanya supaya tidak ada jalur yang bisa menyimpan data non-MTL.
+    const mtlRows = data.filter((record) => matchesMtl((record as { refB?: unknown })?.refB));
+    const skippedNoMtl = data.length - mtlRows.length;
+    if (mtlRows.length === 0) {
+      return reply.code(400).send({
+        error: 'Bad Request',
+        message:
+          'Tidak ada baris yang mengandung "MTL" pada kolom "Ref_B_PO". ' +
+          'Semua data ditolak dan tidak ada yang disimpan.',
+        summary: { totalRows: data.length, included: 0, skippedNoMtl, failed: 0 },
+      });
+    }
+
     try {
       const previousCount = await prisma.stockRawMaterial.count({ where: { periodId } });
 
-      const recordsToInsert = data.map((record) => ({
+      const recordsToInsert = mtlRows.map((record) => ({
         periodId,
         itemDesc: record.itemDesc,
         supplier: record.supplier || null,
         qty: Number(record.qty) || 0,
         unit: record.unit,
         date: new Date(record.date),
+        refB: record.refB ?? null,
       }));
 
       await prisma.$transaction(
@@ -347,10 +495,14 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
 
       return reply.code(201).send({
         message:
-          mode === 'overwrite'
+          (mode === 'overwrite'
             ? `Periode "${resolved.label}" ditimpa dengan ${recordsToInsert.length} baris stok.`
-            : `Ditambahkan ${recordsToInsert.length} baris stok ke periode "${resolved.label}".`,
+            : `Ditambahkan ${recordsToInsert.length} baris stok ke periode "${resolved.label}".`) +
+          (skippedNoMtl > 0
+            ? ` ${skippedNoMtl} baris dilewati karena kolom "Ref_B_PO" tidak mengandung "MTL".`
+            : ''),
         count: recordsToInsert.length,
+        skippedNoMtl,
         periodId,
         label: resolved.label,
         replaced: previousCount,
@@ -363,12 +515,19 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
   });
 
   // Add Manual — WAJIB menyertakan periode.
-  server.post('/api/v1/stock-raw-material', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
+  server.post('/api/v1/stock-raw-material', { preValidation: [authenticate] }, async (request, reply) => {
     const body = (request.body || {}) as any;
-    const { itemDesc, supplier, unit, qty, date } = body;
+    const { itemDesc, supplier, unit, qty, date, refB } = body;
 
     if (!itemDesc || !unit || qty === undefined || !date) {
       return reply.code(400).send({ error: 'Bad Request', message: 'Required fields are missing' });
+    }
+    // Ref-B WAJIB dan harus mengandung "MTL" — aturan yang SAMA dengan import.
+    if (!matchesMtl(refB)) {
+      return reply.code(400).send({
+        error: 'Bad Request',
+        message: 'Kolom "Ref_B_PO" wajib diisi dan harus mengandung "MTL".',
+      });
     }
 
     const resolved = await resolveUploadPeriod(body, request.user!.id);
@@ -384,6 +543,7 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
         unit,
         qty: parseFloat(qty),
         date: new Date(date),
+        refB: String(refB).trim(),
       },
     });
 
@@ -392,13 +552,24 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
   });
 
   // Update
-  server.put('/api/v1/stock-raw-material/:id', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
+  server.put('/api/v1/stock-raw-material/:id', { preValidation: [authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const { itemDesc, supplier, unit, qty, date } = request.body as any;
+    const { itemDesc, supplier, unit, qty, date, refB } = request.body as any;
 
     const existing = await prisma.stockRawMaterial.findUnique({ where: { id } });
     if (!existing) {
       return reply.code(404).send({ error: 'Not Found', message: 'Record not found' });
+    }
+
+    // Kolom "Ref_B_PO" juga divalidasi saat EDIT: nilai akhir (baru atau yang
+    // sudah tersimpan) WAJIB mengandung "MTL". Baris lama yang refB-nya masih
+    // kosong jadi harus dilengkapi saat diedit.
+    const effectiveRefB = refB !== undefined ? refB : existing.refB;
+    if (!matchesMtl(effectiveRefB)) {
+      return reply.code(400).send({
+        error: 'Bad Request',
+        message: 'Kolom "Ref_B_PO" wajib diisi dan harus mengandung "MTL".',
+      });
     }
 
     const updated = await prisma.stockRawMaterial.update({
@@ -409,6 +580,7 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
         ...(unit && { unit }),
         ...(qty !== undefined && { qty: parseFloat(qty) }),
         ...(date && { date: new Date(date) }),
+        refB: String(effectiveRefB).trim(),
       },
     });
 
@@ -417,7 +589,7 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
   });
 
   // Delete
-  server.delete('/api/v1/stock-raw-material/:id', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
+  server.delete('/api/v1/stock-raw-material/:id', { preValidation: [authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
 
     const existing = await prisma.stockRawMaterial.findUnique({ where: { id } });
@@ -432,7 +604,7 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
   });
 
   // Bulk Delete
-  server.post('/api/v1/stock-raw-material/bulk-delete', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
+  server.post('/api/v1/stock-raw-material/bulk-delete', { preValidation: [authenticate] }, async (request, reply) => {
     const { ids } = request.body as { ids: string[] };
 
     if (!ids || !Array.isArray(ids) || ids.length === 0) {

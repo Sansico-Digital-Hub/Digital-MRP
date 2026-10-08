@@ -5,6 +5,7 @@ import { authenticate, requireRole } from '../middleware/auth';
 import { EDIT_ROLES } from '../lib/permissions';
 import { computePeriodSignature, compareSignature } from '../lib/periodScope';
 import { runMaterialCalculation, type MaterialCalcSource } from '../lib/materialCalcEngine';
+import { analyzeNpofCoverage } from '../lib/npofCoverage';
 
 // Material Planning HANYA membaca data milik modul MATERIAL.
 // MRP & WIP Production Planning disimpan terpisah (kolom `moduleType`).
@@ -364,13 +365,34 @@ export default async function materialPlanningRoutes(server: FastifyInstance) {
 
   server.patch('/api/v1/material-planning/cycles/:id', { preValidation: editor }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const body = (request.body || {}) as { label?: string; notes?: string };
+    const body = (request.body || {}) as { label?: string; notes?: string; uploadMonth?: string };
     const cycle = await requireCycle(id);
     if (!cycle) return reply.code(404).send({ error: 'Not Found', message: 'Periode tidak ditemukan' });
 
+    let newUploadMonth = cycle.uploadMonth;
+    let newLabel = body.label?.trim();
+
+    if (body.uploadMonth && body.uploadMonth !== cycle.uploadMonth) {
+      if (!/^\d{4}-\d{2}$/.test(body.uploadMonth)) {
+        return reply.code(400).send({ error: 'Bad Request', message: 'Format uploadMonth tidak valid (YYYY-MM)' });
+      }
+      const existing = await prisma.planningCycle.findUnique({ where: { uploadMonth: body.uploadMonth } });
+      if (existing) {
+        return reply.code(409).send({ error: 'Conflict', message: `Bulan upload ${body.uploadMonth} sudah dipakai.` });
+      }
+      newUploadMonth = body.uploadMonth;
+      if (!newLabel) {
+        newLabel = labelFromUploadMonth(newUploadMonth);
+      }
+    }
+
     const updated = await prisma.planningCycle.update({
       where: { id },
-      data: { label: body.label?.trim() || cycle.label, notes: body.notes ?? cycle.notes },
+      data: { 
+        uploadMonth: newUploadMonth,
+        label: newLabel || cycle.label, 
+        notes: body.notes ?? cycle.notes 
+      },
     });
 
     await writeAudit({
@@ -379,9 +401,9 @@ export default async function materialPlanningRoutes(server: FastifyInstance) {
       action: 'UPDATE',
       entityType: 'PlanningCycle',
       entityId: id,
-      dataBefore: { label: cycle.label, notes: cycle.notes },
-      dataAfter: { label: updated.label, notes: updated.notes },
-      notes: 'Label/catatan periode diubah',
+      dataBefore: { uploadMonth: cycle.uploadMonth, label: cycle.label, notes: cycle.notes },
+      dataAfter: { uploadMonth: updated.uploadMonth, label: updated.label, notes: updated.notes },
+      notes: 'Informasi periode diubah',
     });
 
     return reply.send({ data: updated });
@@ -502,6 +524,42 @@ export default async function materialPlanningRoutes(server: FastifyInstance) {
     });
   });
 
+  /**
+   * Cakupan NPOF: part number mana yang ada di MRP periode ini tetapi TIDAK ADA
+   * di NPOF, plus part yang ada di NPOF tapi datanya tidak lengkap.
+   *
+   * NPOF adalah referensi GLOBAL (tidak per periode) — sengaja tidak difilter
+   * periodId, sama seperti perhitungan di `/calculate`.
+   */
+  server.get('/api/v1/material-planning/cycles/:id/npof-coverage', { preValidation: [authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const cycle = await requireCycle(id);
+    if (!cycle) return reply.code(404).send({ error: 'Not Found', message: 'Periode tidak ditemukan' });
+
+    const [mrpRows, npofs] = await Promise.all([
+      prisma.weeklySchedule.findMany({ where: { periodId: id, moduleType: MATERIAL }, include: { item: true } }),
+      prisma.npofMaterial.findMany(),
+    ]);
+
+    const analysis = analyzeNpofCoverage({
+      mrpWeeks: mrpRows.map((r) => ({
+        partNumber: r.item.partNumber,
+        description: r.item.itemName,
+        weekNumber: r.weekNumber,
+        quantity: r.quantity,
+      })),
+      npofs,
+    });
+
+    return reply.send({
+      data: {
+        ...analysis,
+        npofTotalRows: npofs.length,
+        periodLabel: cycle.label,
+      },
+    });
+  });
+
   // ══════════════════════════════════════════════════════════════════════
   // PERHITUNGAN
   // ══════════════════════════════════════════════════════════════════════
@@ -558,14 +616,16 @@ export default async function materialPlanningRoutes(server: FastifyInstance) {
       npofs,
     };
 
-    // mrpStartDate boleh belum terisi kalau periode dibuat dari upload non-MRP;
-    // ambil dari kalender MRP periode ini sebagai cadangan.
+    // Rentang tanggal diambil dari DATA MRP periode ini (sumber kebenaran).
+    // Kolom `PlanningCycle.mrpStartDate` hanya cadangan: kalau keduanya berbeda,
+    // data yang menang supaya `periodStartDate` (dasar penerjemahan tanggal PO
+    // menjadi indeks minggu) tidak pernah memakai nilai basi.
     const periodStartDate =
-      cycle.mrpStartDate ??
       mrpRows.reduce<Date | null>(
         (min, r) => (!min || r.weekStartDate < min ? r.weekStartDate : min),
         null,
-      );
+      ) ??
+      cycle.mrpStartDate;
     if (!periodStartDate) {
       return reply.code(400).send({
         error: 'Bad Request',

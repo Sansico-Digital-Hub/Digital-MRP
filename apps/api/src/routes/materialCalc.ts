@@ -1,8 +1,7 @@
 import { FastifyInstance } from 'fastify';
 import prisma from '../lib/prisma';
 import { config } from '../config';
-import { authenticate, requireRole } from '../middleware/auth';
-import { EDIT_ROLES } from '../lib/permissions';
+import { authenticate } from '../middleware/auth';
 import {
   runMaterialCalculation,
   type MaterialCalcEngineResult,
@@ -37,7 +36,7 @@ export default async function materialCalcRoutes(server: FastifyInstance) {
     return reply.send({ data: histories });
   });
 
-  server.post('/api/v1/material-calculation/history', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
+  server.post('/api/v1/material-calculation/history', { preValidation: [authenticate] }, async (request, reply) => {
     const body = request.body as {
       periodStartDate?: string;
       periodEndDate?: string;
@@ -96,7 +95,7 @@ export default async function materialCalcRoutes(server: FastifyInstance) {
     return reply.send({ data: history });
   });
 
-  server.put('/api/v1/material-calculation/history/:id', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
+  server.put('/api/v1/material-calculation/history/:id', { preValidation: [authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const body = request.body as { periodStartDate?: string; periodEndDate?: string };
     const existing = await prisma.calculationHistory.findUnique({ where: { id } });
@@ -120,7 +119,7 @@ export default async function materialCalcRoutes(server: FastifyInstance) {
     return reply.send({ data: updated });
   });
 
-  server.delete('/api/v1/material-calculation/history/:id', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
+  server.delete('/api/v1/material-calculation/history/:id', { preValidation: [authenticate] }, async (request, reply) => {
     const { id } = request.params as { id: string };
     const existing = await prisma.calculationHistory.findUnique({ where: { id }, select: { id: true } });
     if (!existing) return reply.code(404).send({ error: 'Not Found', message: 'Calculation history not found' });

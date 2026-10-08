@@ -9,7 +9,9 @@ import {
   useCycleRetentionAction,
   useExpiredCycles,
   useNpofCheck,
+  useNpofCoverage,
   usePeriodSourceRows,
+  NPOF_FIELD_LABELS,
   type CycleAuditEntry,
   type CycleCalculationResult,
   type CycleSourceRow,
@@ -17,6 +19,8 @@ import {
   type ExpiredCycle,
   type MaterialGroup,
   type MaterialCalcResponse,
+  type NpofCoverageRow,
+  type NpofRequiredField,
   type PartNumberDetail,
   type WeeklyMatrix,
 } from '../hooks/useMaterialCalc';
@@ -27,6 +31,9 @@ import {
   CheckCircle,
   ChevronDown,
   ChevronRight,
+  FileDown,
+  Files,
+  Filter,
   Folder,
   FolderOpen,
   History,
@@ -34,12 +41,15 @@ import {
   Lock,
   Plus,
   RefreshCw,
+  Search,
   Unlock,
   X,
 } from 'lucide-react';
 import { format } from 'date-fns';
 import { id as indonesianLocale } from 'date-fns/locale';
 import { usePeriods } from '../hooks/usePeriods';
+import { exportAllMaterialTypesZip, exportMaterialTypePdf } from '../lib/materialCalcExport';
+import { materialTypeLabel } from '../lib/materialCalcPdf';
 
 // ── Format angka & tanggal ────────────────────────────────────────────────
 
@@ -86,16 +96,35 @@ function getFallbackTimeline(leadTimeMonths: number) {
   };
 }
 
-// ── Sel tabel mingguan: baris atas lembar, baris bawah kg ─────────────────
+// ── Sel tabel mingguan: lembar (semua baris) + kg (khusus End Ind) ────────
 
-function UnitCell({ sheet, kg, hasKg, poNumbers }: { sheet: number | undefined; kg: number | undefined; hasKg: boolean; poNumbers?: string[] }) {
+/**
+ * Sel angka tabel mingguan.
+ *
+ * `showKg` diaktifkan pada baris **Total + Allowance, Stock As Of, Outstanding PO,
+ * dan End Ind**. Keterangan kg dihitung sederhana: **lbr × Kg/Lbr** grup
+ * (tidak mengikuti rumus saldo kg di backend). Gaya teks kg sengaja SAMA dengan
+ * baris lbr (tebal & warna penuh, tanpa peredupan).
+ */
+function UnitCell({
+  sheet,
+  kg,
+  hasKg,
+  showKg = false,
+  poNumbers,
+}: {
+  sheet: number | undefined;
+  kg: number | undefined;
+  hasKg: boolean;
+  showKg?: boolean;
+  poNumbers?: string[];
+}) {
   const sheets = sheet ?? 0;
   const kilos = kg ?? 0;
-  const negative = sheets < 0 || kilos < 0;
   return (
-    <td className={`px-2 py-1.5 text-right align-top tabular-nums ${negative ? 'text-red-600' : 'text-gray-700'}`}>
+    <td className={`px-2 py-1.5 text-right align-top tabular-nums ${sheets < 0 ? 'text-red-600' : 'text-gray-700'}`}>
       <div className="text-[11px] font-medium">{formatNum(sheets, 0)} lbr</div>
-      <div className="text-[10px] text-gray-400">{hasKg ? `${formatNum(kilos)} kg` : '—'}</div>
+      {showKg && <div className="text-[11px] font-medium">{hasKg ? `${formatNum(kilos)} kg` : '—'}</div>}
       {poNumbers && poNumbers.length > 0 && (
         <div
           className="mt-0.5 flex flex-wrap justify-end gap-x-1 text-[9px] leading-tight text-indigo-400"
@@ -117,12 +146,18 @@ function UnitCell({ sheet, kg, hasKg, poNumbers }: { sheet: number | undefined; 
 function WeeklyMatrixTable({ matrix }: { matrix: WeeklyMatrix }) {
   const width = matrix.columns.length;
   const { summary } = matrix;
+  /**
+   * Kg/Lbr grup, diambil dari kolom **Kg/Lbr** baris pertama yang punya formula
+   * material. Semua keterangan kg di bawah = nilai lbr × angka ini.
+   */
+  const groupFm = matrix.rows.find((r) => r.hasKg)?.kgPerSheet ?? 0;
+  const hasGroupKg = groupFm > 0;
 
   /** Baris ringkasan yang mengikuti pola yang sama untuk semua bagian. */
-  const summaryRows: { label: string; sheet: number[]; kg: number[]; strong?: boolean }[] = [
-    { label: 'Total Req', sheet: summary.totalReqSheet, kg: summary.totalReq, strong: true },
-    { label: 'Allowance (5%)', sheet: summary.allowanceSheet, kg: summary.allowance },
-    { label: 'Total + Allowance', sheet: summary.totalPlusAllowanceSheet, kg: summary.totalPlusAllowance, strong: true },
+  const summaryRows: { label: string; sheet: number[]; strong?: boolean }[] = [
+    { label: 'Total Req', sheet: summary.totalReqSheet, strong: true },
+    { label: 'Allowance (5%)', sheet: summary.allowanceSheet },
+    { label: 'Total + Allowance', sheet: summary.totalPlusAllowanceSheet, strong: true },
   ];
 
   return (
@@ -169,9 +204,18 @@ function WeeklyMatrixTable({ matrix }: { matrix: WeeklyMatrix }) {
                 {r.label}
                 {r.label === 'Total Req' && <span className="ml-2 text-[10px] font-normal text-amber-600">sebagian estimasi</span>}
               </td>
-              {Array.from({ length: width }).map((_, i) => (
-                <UnitCell key={i} sheet={r.sheet[i]} kg={r.kg[i]} hasKg />
-              ))}
+              {Array.from({ length: width }).map((_, i) => {
+                const showKg = r.label === 'Total + Allowance';
+                return (
+                  <UnitCell
+                    key={i}
+                    sheet={r.sheet[i]}
+                    kg={showKg ? (r.sheet[i] ?? 0) * groupFm : undefined}
+                    hasKg={hasGroupKg}
+                    showKg={showKg}
+                  />
+                );
+              })}
             </tr>
           ))}
 
@@ -179,7 +223,7 @@ function WeeklyMatrixTable({ matrix }: { matrix: WeeklyMatrix }) {
             <td className="px-3 py-1.5 text-gray-700 sticky left-0 bg-inherit z-10" colSpan={7}>
               Stock As Of
             </td>
-            <UnitCell sheet={summary.stockAsOfSheet} kg={summary.stockAsOf} hasKg />
+            <UnitCell sheet={summary.stockAsOfSheet} kg={summary.stockAsOfSheet * groupFm} hasKg={hasGroupKg} showKg />
             {Array.from({ length: Math.max(0, width - 1) }).map((_, i) => (
               <td key={i} className="px-2 py-1.5 text-right text-gray-300">
                 —
@@ -195,8 +239,9 @@ function WeeklyMatrixTable({ matrix }: { matrix: WeeklyMatrix }) {
               <UnitCell
                 key={i}
                 sheet={summary.outstandingPoSheet[i]}
-                kg={summary.outstandingPo[i]}
-                hasKg
+                kg={(summary.outstandingPoSheet[i] ?? 0) * groupFm}
+                hasKg={hasGroupKg}
+                showKg
                 poNumbers={summary.outstandingPoNumbers?.[i]}
               />
             ))}
@@ -207,7 +252,13 @@ function WeeklyMatrixTable({ matrix }: { matrix: WeeklyMatrix }) {
               End Ind
             </td>
             {Array.from({ length: width }).map((_, i) => (
-              <UnitCell key={i} sheet={summary.endIndSheet[i]} kg={summary.endInd[i]} hasKg />
+              <UnitCell
+                key={i}
+                sheet={summary.endIndSheet[i]}
+                kg={(summary.endIndSheet[i] ?? 0) * groupFm}
+                hasKg={hasGroupKg}
+                showKg
+              />
             ))}
           </tr>
         </tbody>
@@ -226,7 +277,7 @@ function DetailTable({ details }: { details: PartNumberDetail[] }) {
           <tr>
             <th className="px-3 py-2 text-left font-semibold">Part Number</th>
             <th className="px-3 py-2 text-right font-semibold">Demand (pcs)</th>
-            <th className="px-3 py-2 text-right font-semibold">Keb. Bersih (kg)</th>
+            <th className="px-3 py-2 text-right font-semibold">Keb. Bersih (lbr)</th>
             <th className="px-3 py-2 text-right font-semibold">Stok Teralokasi (kg)</th>
             <th className="px-3 py-2 text-right font-semibold">Sheet Beli</th>
             <th className="px-3 py-2 text-right font-semibold">Pcs Beli</th>
@@ -248,7 +299,7 @@ function DetailTable({ details }: { details: PartNumberDetail[] }) {
                 </div>
               </td>
               <td className="px-3 py-2 text-right text-gray-700">{formatNum(d.demandPcs, 0)}</td>
-              <td className="px-3 py-2 text-right text-gray-700">{formatNum(d.kgNet2)}</td>
+              <td className="px-3 py-2 text-right text-gray-700">{formatNum(d.sheetsNet2, 0)}</td>
               <td className="px-3 py-2 text-right text-gray-700">{formatNum(d.allocatedKg)}</td>
               {d.isSufficient ? (
                 <>
@@ -376,7 +427,8 @@ function GroupRow({ group }: { group: MaterialGroup }) {
                 Rincian per Part
               </button>
               <span className="text-[11px] text-gray-500">
-                Setiap kolom: baris atas = lembar, baris bawah = kg
+                Satuan: lembar (lbr). Keterangan kg (= lbr × Kg/Lbr) ditampilkan pada baris Total + Allowance,
+                Stock As Of, Outstanding PO, dan End Ind.
               </span>
             </div>
             {tab === 'matrix' ? <WeeklyMatrixTable matrix={group.weeklyMatrix} /> : <DetailTable details={group.details} />}
@@ -401,28 +453,67 @@ function getMeta(materialType: string) {
   return MATERIAL_TYPE_META[materialType] ?? MATERIAL_TYPE_META['Lainnya'];
 }
 
-/** Satu kartu folder material — klik untuk memilih / deselect. */
+/**
+ * Key unik sub-folder di dalam folder jenis material: kombinasi GRAMATUR + SUPPLIER.
+ * Dipakai untuk mengelompokkan grup ukuran (lihat `gramSupplierFolders`).
+ */
+function gramSupplierKey(g: Pick<MaterialGroup, 'gramatur' | 'supplier'>): string {
+  return `${g.gramatur || '—'}||${g.supplier || '—'}`;
+}
+
+/** Label judul folder gramatur, mis. "450" -> "450 gsm"; kosong -> "Tanpa gramatur". */
+function formatGramatur(gramatur: string): string {
+  if (!gramatur || gramatur === '—') return 'Tanpa gramatur';
+  return /[a-z]/i.test(gramatur) ? gramatur : `${gramatur} gsm`;
+}
+
+/**
+ * Normalisasi teks untuk kotak pencarian hasil perhitungan.
+ * Ukuran di data tidak konsisten ("66 × 50 CM", "64 CM x 64 CM", "47X75.5CM"),
+ * jadi pencarian dibuat toleran: huruf kecil, semua spasi dibuang, dan
+ * karakter kali (× ✕ ✖) disamakan dengan huruf "x".
+ * Contoh: "66 x 50" cocok dengan "66 × 50 CM".
+ */
+function searchKey(value: string | null | undefined): string {
+  return (value ?? '')
+    .toLowerCase()
+    .replace(/[\u00d7\u2715\u2716]/g, 'x')
+    .replace(/\s+/g, '');
+}
+
+/** Satu kartu folder material — klik untuk memilih / deselect, atau export PDF-nya. */
 function MaterialFolderCard({
   materialType,
   groups,
   isSelected,
   onClick,
+  onExport,
+  exporting,
 }: {
   materialType: string;
   groups: MaterialGroup[];
   isSelected: boolean;
   onClick: () => void;
+  onExport: () => void;
+  exporting?: boolean;
 }) {
   const meta = getMeta(materialType);
   const shortageCount   = groups.filter((g) => !g.isSufficient).length;
   const sufficientCount = groups.filter((g) =>  g.isSufficient).length;
 
   return (
-    <button
-      type="button"
+    <div
+      role="button"
+      tabIndex={0}
       onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      }}
       className={`
-        w-full text-left rounded-xl border-2 p-4 transition-all duration-150
+        w-full text-left rounded-xl border-2 p-4 transition-all duration-150 cursor-pointer
         hover:shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-300
         ${isSelected
           ? `${meta.selectedBg} ${meta.selectedBorder} shadow-sm`
@@ -456,7 +547,103 @@ function MaterialFolderCard({
           </div>
         </div>
       </div>
-    </button>
+      <div className="mt-3 border-t border-gray-100 pt-2">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onExport();
+          }}
+          disabled={exporting || groups.length === 0}
+          title={`Satu file PDF berisi ${groups.length} ukuran di folder ${materialTypeLabel(materialType)}`}
+          className="inline-flex w-full items-center justify-center gap-1 px-2 py-1 text-[11px] rounded-md border border-gray-300 text-gray-700 hover:bg-white disabled:opacity-50"
+        >
+          {exporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileDown className="w-3.5 h-3.5" />}
+          {exporting ? 'Menyiapkan...' : 'Export PDF'}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Satu kartu sub-folder di dalam folder jenis material: GRAMATUR + SUPPLIER
+ * disatukan. Isi folder ini baru ukuran (dan part number) nya.
+ */
+function GramSupplierFolderCard({
+  gramatur,
+  supplier,
+  groups,
+  onClick,
+  onExport,
+  exporting,
+}: {
+  gramatur: string;
+  supplier: string;
+  groups: MaterialGroup[];
+  onClick: () => void;
+  onExport: () => void;
+  exporting?: boolean;
+}) {
+  const shortageCount   = groups.filter((g) => !g.isSufficient).length;
+  const sufficientCount = groups.filter((g) =>  g.isSufficient).length;
+  const partCount       = groups.reduce((acc, g) => acc + g.details.length, 0);
+
+  return (
+    <div
+      role="button"
+      tabIndex={0}
+      onClick={onClick}
+      onKeyDown={(e) => {
+        if (e.key === 'Enter' || e.key === ' ') {
+          e.preventDefault();
+          onClick();
+        }
+      }}
+      className="w-full text-left rounded-xl border-2 border-gray-200 bg-white p-4 transition-all duration-150 cursor-pointer hover:shadow-md hover:border-amber-300 focus:outline-none focus:ring-2 focus:ring-indigo-300"
+    >
+      <div className="flex items-start gap-3">
+        <div className="mt-0.5 text-amber-500">
+          <Folder className="w-6 h-6" />
+        </div>
+        <div className="min-w-0 flex-1">
+          <div className="font-semibold text-sm text-gray-800">{formatGramatur(gramatur)}</div>
+          <div className="text-xs text-gray-500 mt-0.5 truncate" title={supplier}>
+            {supplier}
+          </div>
+          <div className="text-xs text-gray-400 mt-0.5">
+            {groups.length} ukuran · {partCount} part
+          </div>
+          <div className="flex flex-wrap gap-1 mt-2">
+            {shortageCount > 0 && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-700">
+                ⚠️ {shortageCount} kurang
+              </span>
+            )}
+            {sufficientCount > 0 && (
+              <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-medium bg-green-100 text-green-700">
+                ✅ {sufficientCount} cukup
+              </span>
+            )}
+          </div>
+        </div>
+      </div>
+      <div className="mt-3 border-t border-gray-100 pt-2">
+        <button
+          type="button"
+          onClick={(e) => {
+            e.stopPropagation();
+            onExport();
+          }}
+          disabled={exporting || groups.length === 0}
+          title={`Satu file PDF berisi ${groups.length} ukuran untuk gramatur & supplier ini`}
+          className="inline-flex w-full items-center justify-center gap-1 px-2 py-1 text-[11px] rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+        >
+          {exporting ? <Loader2 className="w-3.5 h-3.5 animate-spin" /> : <FileDown className="w-3.5 h-3.5" />}
+          {exporting ? 'Menyiapkan...' : 'Export PDF'}
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -536,6 +723,7 @@ const SOURCE_COLUMNS: Record<string, { key: string; label: string; numeric?: boo
   ],
   STOCK_RM: [
     { key: 'itemDesc', label: 'Item' },
+    { key: 'refB', label: 'Ref-B' },
     { key: 'supplier', label: 'Supplier' },
     { key: 'qty', label: 'Qty', numeric: true },
     { key: 'unit', label: 'Satuan' },
@@ -546,6 +734,7 @@ const SOURCE_COLUMNS: Record<string, { key: string; label: string; numeric?: boo
     { key: 'planReceivedDate', label: 'Tgl Rencana' },
     { key: 'supplierName', label: 'Supplier' },
     { key: 'itemDesc', label: 'Item' },
+    { key: 'refB', label: 'Ref-B' },
     { key: 'qtyOrder', label: 'Qty Order', numeric: true },
     { key: 'qtyOrderUnit', label: 'Satuan' },
     { key: 'qtyDelivered', label: 'Terkirim', numeric: true },
@@ -617,6 +806,224 @@ const SOURCE_LABELS: Record<string, string> = {
   WIP: 'WIP',
 };
 
+/** Sub-folder khusus: part MRP yang tidak ada / datanya kurang di NPOF. */
+const NPOF_CHECK = 'NPOF_CHECK';
+
+const NPOF_STATUS_META: Record<NpofCoverageRow['status'], { label: string; badge: string }> = {
+  MISSING: { label: 'Tidak ada di NPOF', badge: 'bg-red-50 text-red-700 border-red-200' },
+  INCOMPLETE: { label: 'Data NPOF kurang', badge: 'bg-amber-50 text-amber-700 border-amber-200' },
+};
+
+/** Tabel part MRP yang tidak ada di NPOF / datanya kurang, dengan pencarian & filter. */
+function NpofCoveragePanel({
+  data,
+  isLoading,
+}: {
+  data?: { summary: { mrpPartCount: number; missingNpofCount: number; incompleteNpofCount: number; completeNpofCount: number; criticalCount: number }; rows: NpofCoverageRow[]; npofTotalRows: number };
+  isLoading: boolean;
+}) {
+  const [filter, setFilter] = useState<'ALL' | 'MISSING' | 'INCOMPLETE'>('ALL');
+  const [search, setSearch] = useState('');
+  const [criticalOnly, setCriticalOnly] = useState(false);
+
+  const allRows = data?.rows ?? [];
+  const summary = data?.summary;
+
+  const rows = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return allRows.filter((r) => {
+      if (filter !== 'ALL' && r.status !== filter) return false;
+      if (criticalOnly && !r.critical) return false;
+      if (!q) return true;
+      return (
+        r.partNumber.toLowerCase().includes(q) ||
+        r.productName.toLowerCase().includes(q) ||
+        (r.supplier ?? '').toLowerCase().includes(q)
+      );
+    });
+  }, [allRows, filter, search, criticalOnly]);
+
+  const LIMIT = 300;
+  const shown = rows.slice(0, LIMIT);
+
+  if (isLoading) {
+    return (
+      <div className="card p-10 text-center text-gray-400">
+        <Loader2 className="w-6 h-6 mx-auto animate-spin" />
+      </div>
+    );
+  }
+
+  if (!summary || summary.mrpPartCount === 0) {
+    return (
+      <div className="card p-10 text-center text-gray-400">
+        Belum ada data MRP untuk periode ini, jadi belum ada part yang bisa dibandingkan dengan NPOF.
+      </div>
+    );
+  }
+
+  return (
+    <div className="space-y-4">
+      {/* Ringkasan cakupan */}
+      <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="card p-4">
+          <div className="text-xs text-gray-500">Part di MRP periode ini (26 minggu penuh)</div>
+          <div className="text-2xl font-bold text-gray-900 mt-1">{formatNum(summary.mrpPartCount, 0)}</div>
+        </div>
+        <div className="card p-4 border-red-200 bg-red-50/40">
+          <div className="text-xs text-red-700">Tidak ada di NPOF</div>
+          <div className="text-2xl font-bold text-red-700 mt-1">{formatNum(summary.missingNpofCount, 0)}</div>
+        </div>
+        <div className="card p-4 border-amber-200 bg-amber-50/40">
+          <div className="text-xs text-amber-700">Ada di NPOF, data kurang</div>
+          <div className="text-2xl font-bold text-amber-700 mt-1">{formatNum(summary.incompleteNpofCount, 0)}</div>
+        </div>
+        <div className="card p-4">
+          <div className="text-xs text-gray-500">Data NPOF lengkap</div>
+          <div className="text-2xl font-bold text-emerald-600 mt-1">{formatNum(summary.completeNpofCount, 0)}</div>
+        </div>
+      </div>
+
+      <div className="rounded-lg border border-blue-200 bg-blue-50/60 px-4 py-3 text-xs text-blue-900">
+        NPOF adalah referensi bersama semua periode ({formatNum(data?.npofTotalRows ?? 0, 0)} baris).{' '}
+        <span className="font-medium">{formatNum(summary.criticalCount, 0)} part</span> di antaranya tidak punya formula
+        material dan/atau ups, sehingga kebutuhan kg-nya dihitung dengan nilai default (estimasi jumbo roll 180 cm).
+        <div className="mt-1">
+          Perhitungan mencakup <span className="font-medium">seluruh 26 minggu periode</span>, termasuk minggu yang
+          sudah lewat. Halaman Master Data → 26-Week Demand hanya menampilkan minggu yang belum lewat, jadi jumlah item
+          di sana bisa lebih kecil dari angka di atas.
+        </div>
+      </div>
+
+      {/* Filter & pencarian */}
+      <div className="card p-3 flex flex-col lg:flex-row lg:items-center gap-3">
+        <div className="flex rounded-md border overflow-hidden shrink-0">
+          {([
+            ['ALL', `Semua (${formatNum(allRows.length, 0)})`],
+            ['MISSING', `Tanpa NPOF (${formatNum(summary.missingNpofCount, 0)})`],
+            ['INCOMPLETE', `Data kurang (${formatNum(summary.incompleteNpofCount, 0)})`],
+          ] as const).map(([key, label]) => (
+            <button
+              key={key}
+              type="button"
+              onClick={() => setFilter(key)}
+              className={`px-3 py-2 text-xs font-medium transition-colors ${
+                filter === key ? 'bg-indigo-600 text-white' : 'bg-white text-gray-600 hover:bg-gray-50'
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        <label className="inline-flex items-center gap-2 text-xs text-gray-600 shrink-0">
+          <input
+            type="checkbox"
+            checked={criticalOnly}
+            onChange={(e) => setCriticalOnly(e.target.checked)}
+            className="rounded border-gray-300"
+          />
+          Hanya yang estimasi (formula/ups kosong)
+        </label>
+
+        <div className="flex-1" />
+
+        <input
+          type="text"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          placeholder="Cari part number / description / supplier…"
+          className="input w-full lg:w-72"
+        />
+      </div>
+
+      {/* Tabel */}
+      <div className="card overflow-hidden">
+        <div className="px-4 py-3 border-b bg-gray-50 text-xs text-gray-500">
+          {formatNum(rows.length, 0)} part
+          {rows.length > LIMIT ? ` · menampilkan ${LIMIT} baris pertama` : ''}
+        </div>
+        <div className="overflow-x-auto max-h-[65vh]">
+          <table className="w-full text-sm">
+            <thead className="text-xs text-gray-500 uppercase bg-gray-50/70 sticky top-0">
+              <tr>
+                <th className="px-4 py-2 font-semibold text-left whitespace-nowrap">Part Number</th>
+                <th className="px-4 py-2 font-semibold text-left whitespace-nowrap">Description</th>
+                <th className="px-4 py-2 font-semibold text-left whitespace-nowrap">Status</th>
+                <th className="px-4 py-2 font-semibold text-right whitespace-nowrap">Minggu Demand</th>
+                <th className="px-4 py-2 font-semibold text-left whitespace-nowrap">Jenis Material</th>
+                <th className="px-4 py-2 font-semibold text-left whitespace-nowrap">Supplier</th>
+                <th className="px-4 py-2 font-semibold text-left whitespace-nowrap">Data NPOF Kurang</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-gray-100">
+              {shown.map((r) => {
+                const meta = NPOF_STATUS_META[r.status];
+                return (
+                  <tr key={r.partNumber} className="hover:bg-gray-50/60">
+                    <td className="px-4 py-2 font-medium text-gray-900 whitespace-nowrap">
+                      {r.partNumber}
+                      {r.isNebeng && (
+                        <span className="ml-2 text-[10px] font-normal text-gray-400" title="Dicetak nebeng pada part lain">
+                          nebeng
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-gray-600 max-w-[22rem] truncate" title={r.productName}>
+                      {r.productName}
+                    </td>
+                    <td className="px-4 py-2 whitespace-nowrap">
+                      <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${meta.badge}`}>
+                        {meta.label}
+                      </span>
+                      {r.critical && (
+                        <span className="ml-1 text-[10px] text-amber-600" title="Kebutuhan kg dihitung dengan nilai default (estimasi)">
+                          ⚠ estimasi
+                        </span>
+                      )}
+                    </td>
+                    <td className="px-4 py-2 text-right tabular-nums text-gray-700 whitespace-nowrap">
+                      {formatNum(r.demandWeekCount, 0)} minggu
+                    </td>
+                    <td className="px-4 py-2 text-gray-600 whitespace-nowrap">
+                      {r.materialType ?? '—'}
+                      {r.material && <span className="ml-1 text-[10px] text-gray-400">({r.material})</span>}
+                    </td>
+                    <td className="px-4 py-2 text-gray-600 whitespace-nowrap">{r.supplier ?? '—'}</td>
+                    <td className="px-4 py-2">
+                      {r.status === 'MISSING' ? (
+                        <span className="text-xs text-red-600">Seluruh data NPOF belum ada</span>
+                      ) : (
+                        <div className="flex flex-wrap gap-1">
+                          {r.missingFields.map((f: NpofRequiredField) => (
+                            <span
+                              key={f}
+                              className="inline-flex rounded border border-amber-200 bg-amber-50 px-1.5 py-0.5 text-[10px] text-amber-700"
+                            >
+                              {NPOF_FIELD_LABELS[f]}
+                            </span>
+                          ))}
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                );
+              })}
+              {shown.length === 0 && (
+                <tr>
+                  <td colSpan={7} className="px-4 py-10 text-center text-gray-400">
+                    Tidak ada part yang cocok dengan filter/pencarian.
+                  </td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function MaterialCalc() {
   const { data: cyclesData, isLoading: isLoadingCycles } = useCycles();
   const cycles = cyclesData?.data ?? [];
@@ -666,6 +1073,21 @@ export function MaterialCalc() {
   /** null = tampilkan semua tipe, string = filter ke tipe tertentu */
   const [selectedMaterialType, setSelectedMaterialType] = useState<string | null>(null);
   /**
+   * Sub-folder GRAMATUR + SUPPLIER yang sedang dibuka di dalam folder jenis material.
+   *  null   -> tampilkan grid sub-folder (satu kartu per gramatur + supplier)
+   *  string -> tampilkan tabel ukuran + part number di dalam sub-folder itu
+   * Key = `${gramatur}||${supplier}` (lihat `gramSupplierKey`).
+   */
+  const [selectedGramSupplier, setSelectedGramSupplier] = useState<string | null>(null);
+  /**
+   * Filter hasil perhitungan (berlaku untuk seluruh isi folder Calculation):
+   * dropdown gramatur, dropdown supplier, dan pencarian teks bebas
+   * (ukuran / part number / deskripsi part). 'ALL' = tanpa filter.
+   */
+  const [filterGramatur, setFilterGramatur] = useState<string>('ALL');
+  const [filterSupplier, setFilterSupplier] = useState<string>('ALL');
+  const [searchQuery, setSearchQuery] = useState('');
+  /**
    * Folder yang sedang dibuka di dalam periode terpilih:
    *  null    -> daftar sub-folder periode (Calculation / MRP / WIP / HOT LIST / STOCK RM / OS PO)
    *  'CALC'  -> isi folder Calculation (folder per material)
@@ -676,9 +1098,13 @@ export function MaterialCalc() {
   // Validitas hasil perhitungan periode ini terhadap data master SEKARANG.
   const { data: dataStatusData } = useCycleDataStatus(cycleId);
   const dataStatus = dataStatusData?.data ?? null;
+
+  // Cakupan NPOF: dipakai untuk badge di kartu sub-folder dan isi panelnya.
+  const { data: npofCoverageData, isLoading: npofCoverageLoading } = useNpofCoverage(cycleId);
+
   const { data: sourceRowsData, isLoading: sourceRowsLoading } = usePeriodSourceRows(
     cycleId,
-    openFolder && openFolder !== 'CALC' ? openFolder : null,
+    openFolder && openFolder !== 'CALC' && openFolder !== NPOF_CHECK ? openFolder : null,
   );
 
 
@@ -706,11 +1132,160 @@ export function MaterialCalc() {
     return [...knownOrder, ...unknown].map((type) => ({ type, groups: map.get(type)! }));
   }, [groups]);
 
-  /** Groups yang ditampilkan di tabel — difilter sesuai kartu yang dipilih */
+  /** Opsi dropdown gramatur — dari SELURUH grup, urut angka lalu teks. */
+  const gramaturOptions = useMemo(() => {
+    const map = new Map<string, string>();
+    for (const g of groups) {
+      const raw = g.gramatur || '';
+      if (!map.has(raw)) map.set(raw, formatGramatur(raw || '—'));
+    }
+    return [...map.entries()]
+      .map(([value, label]) => ({ value, label }))
+      .sort((a, b) => {
+        const na = Number.parseFloat(a.value);
+        const nb = Number.parseFloat(b.value);
+        const fa = Number.isFinite(na) ? na : Number.POSITIVE_INFINITY;
+        const fb = Number.isFinite(nb) ? nb : Number.POSITIVE_INFINITY;
+        if (fa !== fb) return fa - fb;
+        return a.label.localeCompare(b.label, 'id');
+      });
+  }, [groups]);
+
+  /** Opsi dropdown supplier — A→Z (supplier kosong jadi "—"). */
+  const supplierOptions = useMemo(() => {
+    const set = new Set<string>();
+    for (const g of groups) set.add(g.supplier || '—');
+    return [...set].sort((a, b) => a.localeCompare(b, 'id'));
+  }, [groups]);
+
+  const hasActiveFilter =
+    filterGramatur !== 'ALL' || filterSupplier !== 'ALL' || searchKey(searchQuery) !== '';
+
+  const resetFilters = () => {
+    setFilterGramatur('ALL');
+    setFilterSupplier('ALL');
+    setSearchQuery('');
+  };
+
+  /**
+   * Hasil perhitungan setelah filter gramatur + supplier + pencarian.
+   * Pencarian mencocokkan **ukuran** grup ATAU **part number** / deskripsi part
+   * di dalam grup itu (jadi grup tetap tampil utuh bila ada part yang cocok).
+   */
+  const filteredGroups = useMemo(() => {
+    const q = searchKey(searchQuery);
+    return groups.filter((g) => {
+      if (filterGramatur !== 'ALL' && (g.gramatur || '') !== filterGramatur) return false;
+      if (filterSupplier !== 'ALL' && (g.supplier || '—') !== filterSupplier) return false;
+      if (!q) return true;
+      if (searchKey(g.ukuran).includes(q)) return true;
+      return g.details.some(
+        (d) => searchKey(d.partNumber).includes(q) || searchKey(d.productName).includes(q),
+      );
+    });
+  }, [groups, filterGramatur, filterSupplier, searchQuery]);
+
+  const filteredShortageGroups = filteredGroups.filter((g) => !g.isSufficient).length;
+  const filteredSufficientGroups = filteredGroups.filter((g) => g.isSufficient).length;
+
+  /** Groups di folder jenis material terpilih (semua groups kalau "Semua"). */
   const displayedGroups = useMemo(
-    () => selectedMaterialType ? groups.filter((g) => (g.materialType || 'Lainnya') === selectedMaterialType) : groups,
-    [groups, selectedMaterialType],
+    () => selectedMaterialType ? filteredGroups.filter((g) => (g.materialType || 'Lainnya') === selectedMaterialType) : filteredGroups,
+    [filteredGroups, selectedMaterialType],
   );
+
+  /**
+   * Kartu folder jenis material untuk grid 'Pilih jenis material'.
+   * Dibangun dari hasil filter supaya angka & isi kartu ikut menyesuaikan
+   * (jenis material yang tidak punya hasil cocok tidak ditampilkan).
+   */
+  const filteredGroupedByType = useMemo(() => {
+    const map = new Map<string, MaterialGroup[]>();
+    for (const g of filteredGroups) {
+      const type = g.materialType || 'Lainnya';
+      if (!map.has(type)) map.set(type, []);
+      map.get(type)!.push(g);
+    }
+    const knownOrder = MATERIAL_ORDER.filter((t) => map.has(t));
+    const unknown = [...map.keys()].filter((t) => !MATERIAL_ORDER.includes(t)).sort();
+    return [...knownOrder, ...unknown].map((type) => ({ type, groups: map.get(type)! }));
+  }, [filteredGroups]);
+
+  /**
+   * Sub-folder di dalam folder jenis material: satu folder per kombinasi
+   * GRAMATUR + SUPPLIER. Di dalamnya baru ada ukuran & part number.
+   */
+  const gramSupplierFolders = useMemo(() => {
+    const map = new Map<string, { key: string; gramatur: string; supplier: string; groups: MaterialGroup[] }>();
+    for (const g of displayedGroups) {
+      const key = gramSupplierKey(g);
+      if (!map.has(key)) {
+        map.set(key, { key, gramatur: g.gramatur || '—', supplier: g.supplier || '—', groups: [] });
+      }
+      map.get(key)!.groups.push(g);
+    }
+    // Urut gramatur naik (angka), lalu supplier A→Z. Gramatur tak berbentuk angka ditaruh paling akhir.
+    return [...map.values()].sort((a, b) => {
+      const ga = Number.parseFloat(a.gramatur);
+      const gb = Number.parseFloat(b.gramatur);
+      const na = Number.isFinite(ga) ? ga : Number.POSITIVE_INFINITY;
+      const nb = Number.isFinite(gb) ? gb : Number.POSITIVE_INFINITY;
+      if (na !== nb) return na - nb;
+      return a.supplier.localeCompare(b.supplier, 'id');
+    });
+  }, [displayedGroups]);
+
+  /**
+   * Sub-folder gramatur + supplier yang sedang dibuka. Otomatis menjadi null
+   * kalau folder itu tersaring keluar oleh filter, sehingga UI kembali ke
+   * daftar sub-folder (bukan menampilkan tabel kosong).
+   */
+  const activeGramSupplier = useMemo(
+    () => gramSupplierFolders.find((f) => f.key === selectedGramSupplier) ?? null,
+    [gramSupplierFolders, selectedGramSupplier],
+  );
+
+  /** Groups yang benar-benar ditampilkan di tabel — difilter lagi oleh sub-folder terpilih. */
+  const tableGroups = useMemo(
+    () => activeGramSupplier
+      ? displayedGroups.filter((g) => gramSupplierKey(g) === activeGramSupplier.key)
+      : displayedGroups,
+    [displayedGroups, activeGramSupplier],
+  );
+
+  // ── Export PDF (satu file per folder jenis material) ──
+  const [exportingKey, setExportingKey] = useState<string | null>(null);
+
+  const exportMeta = useMemo(
+    () => ({
+      periodLabel: activeCycle?.label ?? null,
+      periodStart: shown?.periodStartDate ?? activeCycle?.mrpStartDate ?? null,
+      periodEnd: shown?.periodEndDate ?? activeCycle?.mrpEndDate ?? null,
+      calculatedAt: shown?.calculatedAt ?? activeCycle?.currentResult?.calculatedAt ?? null,
+    }),
+    [activeCycle, shown],
+  );
+
+  /**
+   * Pembuatan PDF berjalan sinkron di main thread (ratusan ribu angka), jadi
+   * status "Menyiapkan..." digambar dulu sebelum pekerjaan berat dimulai.
+   */
+  const runExport = (key: string, job: () => void) => {
+    setExportingKey(key);
+    setTimeout(() => {
+      try {
+        job();
+        setToast({
+          kind: 'ok',
+          text: key === 'ALL' ? 'Export selesai: beberapa PDF dalam satu file ZIP.' : 'Export PDF selesai.',
+        });
+      } catch (e) {
+        setToast({ kind: 'err', text: e instanceof Error ? e.message : 'Gagal membuat PDF' });
+      } finally {
+        setExportingKey(null);
+      }
+    }, 40);
+  };
 
   const statusBadge = (() => {
     if (!activeCycle) return null;
@@ -888,7 +1463,11 @@ export function MaterialCalc() {
                     <>
                       <ChevronRight className="w-3.5 h-3.5 text-gray-400 shrink-0" />
                       <span className="truncate text-gray-600">
-                        {openFolder === 'CALC' ? 'Calculation' : (SOURCE_LABELS[openFolder] ?? openFolder)}
+                        {openFolder === 'CALC'
+                          ? 'Calculation'
+                          : openFolder === NPOF_CHECK
+                            ? 'Part tanpa / kurang NPOF'
+                            : (SOURCE_LABELS[openFolder] ?? openFolder)}
                       </span>
                     </>
                   )}
@@ -949,7 +1528,7 @@ export function MaterialCalc() {
 
           {/* Level 2 — sub-folder periode */}
           {!openFolder && (
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
               <button
                 type="button"
                 onClick={() => setOpenFolder('CALC')}
@@ -959,6 +1538,26 @@ export function MaterialCalc() {
                 <div className="font-semibold text-gray-900">Calculation</div>
                 <div className="text-xs text-gray-500 mt-0.5">
                   {dataStatus?.hasResult ? `${formatNum(groups.length, 0)} grup material` : 'Belum dihitung'}
+                </div>
+              </button>
+
+              <button
+                type="button"
+                onClick={() => setOpenFolder(NPOF_CHECK)}
+                className="card p-5 text-left hover:border-rose-400 hover:bg-rose-50/30 transition-colors"
+              >
+                <AlertTriangle className="w-7 h-7 text-rose-600 mb-2" />
+                <div className="font-semibold text-gray-900">Part tanpa NPOF</div>
+                <div className="text-xs text-gray-500 mt-0.5">
+                  {npofCoverageLoading
+                    ? 'Memuat…'
+                    : npofCoverageData?.data
+                      ? `${formatNum(
+                          npofCoverageData.data.summary.missingNpofCount +
+                            npofCoverageData.data.summary.incompleteNpofCount,
+                          0,
+                        )} part perlu ditinjau`
+                      : '—'}
                 </div>
               </button>
 
@@ -989,7 +1588,7 @@ export function MaterialCalc() {
           )}
 
           {/* Level 3b — isi folder data master periode ini */}
-          {openFolder && openFolder !== 'CALC' && (
+          {openFolder && openFolder !== 'CALC' && openFolder !== NPOF_CHECK && (
             <div className="card overflow-hidden">
               {sourceRowsLoading ? (
                 <div className="p-10 text-center text-gray-400">
@@ -1003,6 +1602,11 @@ export function MaterialCalc() {
                 <SourceRowsTable sourceType={openFolder} rows={sourceRowsData?.data ?? []} />
               )}
             </div>
+          )}
+
+          {/* Level 3c — panel cakupan NPOF (part MRP tanpa / kurang data NPOF) */}
+          {openFolder === NPOF_CHECK && (
+            <NpofCoveragePanel data={npofCoverageData?.data} isLoading={npofCoverageLoading} />
           )}
         </>
       )}
@@ -1026,16 +1630,134 @@ export function MaterialCalc() {
             </div>
           </div>
 
+          {/* ── Filter hasil perhitungan: gramatur, supplier, pencarian ── */}
+          <div className="card p-3">
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="flex items-center gap-1.5 text-xs font-medium text-gray-500 uppercase tracking-wide pb-2">
+                <Filter className="w-3.5 h-3.5" />
+                Filter hasil
+              </div>
+
+              <label className="flex flex-col gap-1">
+                <span className="text-[11px] font-medium text-gray-500">Gramatur</span>
+                <select
+                  value={filterGramatur}
+                  onChange={(e) => setFilterGramatur(e.target.value)}
+                  className="px-2.5 py-1.5 text-sm border border-gray-300 rounded-md bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                >
+                  <option value="ALL">Semua gramatur</option>
+                  {gramaturOptions.map((o) => (
+                    <option key={o.value || '__tanpa_gramatur__'} value={o.value}>
+                      {o.label}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="flex flex-col gap-1">
+                <span className="text-[11px] font-medium text-gray-500">Supplier</span>
+                <select
+                  value={filterSupplier}
+                  onChange={(e) => setFilterSupplier(e.target.value)}
+                  className="px-2.5 py-1.5 text-sm border border-gray-300 rounded-md bg-white text-gray-700 focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                >
+                  <option value="ALL">Semua supplier</option>
+                  {supplierOptions.map((s) => (
+                    <option key={s} value={s}>
+                      {s}
+                    </option>
+                  ))}
+                </select>
+              </label>
+
+              <label className="flex flex-col gap-1 flex-1 min-w-[220px]">
+                <span className="text-[11px] font-medium text-gray-500">Cari ukuran / part number</span>
+                <div className="relative">
+                  <Search className="w-3.5 h-3.5 absolute left-2.5 top-1/2 -translate-y-1/2 text-gray-400" />
+                  <input
+                    type="text"
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    placeholder="mis. 66 x 50 CM atau JPT87-0940"
+                    title="Mencari pada ukuran, part number, dan deskripsi part"
+                    className="w-full pl-8 pr-8 py-1.5 text-sm border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-indigo-200"
+                  />
+                  {searchQuery !== '' && (
+                    <button
+                      type="button"
+                      onClick={() => setSearchQuery('')}
+                      title="Bersihkan pencarian"
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-gray-400 hover:text-gray-600"
+                    >
+                      <X className="w-3.5 h-3.5" />
+                    </button>
+                  )}
+                </div>
+              </label>
+
+              <div className="flex items-center gap-2 pb-1">
+                <span className="text-xs text-gray-500 whitespace-nowrap">
+                  {filteredGroups.length} / {groups.length} ukuran
+                </span>
+                {hasActiveFilter && (
+                  <button
+                    type="button"
+                    onClick={resetFilters}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                    Reset
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+
           {/* ── Grid folder card ── */}
           <div>
-            <div className="text-xs font-medium text-gray-500 mb-2 uppercase tracking-wide">
-              Pilih jenis material
+            <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+              <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                Pilih jenis material
+              </div>
+              <button
+                type="button"
+                onClick={() =>
+                  runExport('ALL', () =>
+                    exportAllMaterialTypesZip(
+                      groupedByType.map(({ type, groups: typeGroups }) => ({ materialType: type, groups: typeGroups })),
+                      exportMeta,
+                    ),
+                  )
+                }
+                disabled={exportingKey !== null || groupedByType.length === 0}
+                title="Beberapa PDF terpisah (satu per jenis material) di dalam satu file ZIP"
+                className="inline-flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-md border border-gray-300 text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+              >
+                {exportingKey === 'ALL' ? (
+                  <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                ) : (
+                  <Files className="w-3.5 h-3.5" />
+                )}
+                {exportingKey === 'ALL' ? 'Menyiapkan...' : 'Export Semua (ZIP)'}
+              </button>
             </div>
+            {filteredGroups.length === 0 && (
+              <div className="card p-8 text-center text-sm text-gray-500">
+                Tidak ada hasil perhitungan yang cocok dengan filter.{' '}
+                <button type="button" onClick={resetFilters} className="text-indigo-600 font-medium hover:underline">
+                  Reset filter
+                </button>
+              </div>
+            )}
+            {filteredGroups.length > 0 && (
             <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
               {/* Card "Semua" */}
               <button
                 type="button"
-                onClick={() => setSelectedMaterialType(null)}
+                onClick={() => {
+                  setSelectedGramSupplier(null);
+                  setSelectedMaterialType(null);
+                }}
                 className={`
                   w-full text-left rounded-xl border-2 p-4 transition-all duration-150
                   hover:shadow-md focus:outline-none focus:ring-2 focus:ring-indigo-300
@@ -1054,16 +1776,16 @@ export function MaterialCalc() {
                     <div className={`font-semibold text-sm ${selectedMaterialType === null ? 'text-indigo-800' : 'text-gray-700'}`}>
                       Semua
                     </div>
-                    <div className="text-xs text-gray-500 mt-0.5">{groups.length} ukuran</div>
+                    <div className="text-xs text-gray-500 mt-0.5">{filteredGroups.length} ukuran</div>
                     <div className="flex flex-wrap gap-1 mt-2">
                       {shortageGroups > 0 && (
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-medium bg-red-100 text-red-700">
-                          ⚠️ {shortageGroups} kurang
+                          ⚠️ {filteredShortageGroups} kurang
                         </span>
                       )}
                       {sufficientGroups > 0 && (
                         <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded-full text-[11px] font-medium bg-green-100 text-green-700">
-                          ✅ {sufficientGroups} cukup
+                          ✅ {filteredSufficientGroups} cukup
                         </span>
                       )}
                     </div>
@@ -1072,59 +1794,152 @@ export function MaterialCalc() {
               </button>
 
               {/* Card per jenis material */}
-              {groupedByType.map(({ type, groups: typeGroups }) => (
+              {filteredGroupedByType.map(({ type, groups: typeGroups }) => (
                 <MaterialFolderCard
                   key={type}
                   materialType={type}
                   groups={typeGroups}
                   isSelected={selectedMaterialType === type}
-                  onClick={() =>
-                    setSelectedMaterialType((prev) => (prev === type ? null : type))
+                  exporting={exportingKey === type}
+                  onClick={() => {
+                    setSelectedGramSupplier(null);
+                    setSelectedMaterialType((prev) => (prev === type ? null : type));
+                  }}
+                  onExport={() =>
+                    runExport(type, () => exportMaterialTypePdf(type, typeGroups, exportMeta))
                   }
                 />
               ))}
             </div>
+            )}
           </div>
 
-          {/* ── Tabel detail (difilter sesuai kartu terpilih) ── */}
-          <div className="card overflow-hidden">
-            {selectedMaterialType && (
-              <div className={`px-4 py-2 border-b text-xs font-medium flex items-center gap-2 ${getMeta(selectedMaterialType).bg} ${getMeta(selectedMaterialType).color}`}>
-                <Folder className="w-3.5 h-3.5" />
-                Menampilkan: {selectedMaterialType} ({displayedGroups.length} ukuran)
-                <button
-                  type="button"
-                  onClick={() => setSelectedMaterialType(null)}
-                  className="ml-auto text-gray-400 hover:text-gray-600"
-                >
-                  <X className="w-3.5 h-3.5" />
-                </button>
+          {/* ── Sub-folder: satu folder per kombinasi gramatur + supplier ── */}
+          {selectedMaterialType && !activeGramSupplier && (
+            <div>
+              <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+                <div className="text-xs font-medium text-gray-500 uppercase tracking-wide">
+                  Folder gramatur &amp; supplier di {materialTypeLabel(selectedMaterialType)}
+                </div>
+                <span className="text-xs text-gray-400">{gramSupplierFolders.length} folder</span>
               </div>
-            )}
-            <div className="overflow-x-auto">
-              <table className="w-full text-sm text-left">
-                <thead className="text-xs text-gray-500 uppercase bg-gray-50/80">
-                  <tr>
-                    <th className="px-4 py-3 w-10"></th>
-                    <th className="px-4 py-3 font-semibold">Ukuran Material</th>
-                    <th className="px-4 py-3 font-semibold">Gramatur</th>
-                    <th className="px-4 py-3 font-semibold">Supplier</th>
-                    <th className="px-4 py-3 font-semibold text-center">Lead Time</th>
-                    <th className="px-4 py-3 font-semibold">Estimasi Pengadaan</th>
-                    <th className="px-4 py-3 font-semibold text-right">Total Sheet Beli</th>
-                    <th className="px-4 py-3 font-semibold text-right">Total Kg Beli</th>
-                    <th className="px-4 py-3 font-semibold">Status</th>
-                    <th className="px-4 py-3 font-semibold text-center">Detail</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {displayedGroups.map((group, idx) => (
-                    <GroupRow key={`${group.ukuran}-${group.gramatur}-${idx}`} group={group} />
+              {gramSupplierFolders.length === 0 ? (
+                <div className="card p-8 text-center text-gray-400 text-sm">
+                  Tidak ada grup material di folder ini.
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-4 gap-3">
+                  {gramSupplierFolders.map((f) => (
+                    <GramSupplierFolderCard
+                      key={f.key}
+                      gramatur={f.gramatur}
+                      supplier={f.supplier}
+                      groups={f.groups}
+                      exporting={exportingKey === f.key}
+                      onClick={() => setSelectedGramSupplier(f.key)}
+                      onExport={() =>
+                        runExport(f.key, () =>
+                          exportMaterialTypePdf(
+                            `${materialTypeLabel(selectedMaterialType)} · ${formatGramatur(f.gramatur)} · ${f.supplier}`,
+                            f.groups,
+                            exportMeta,
+                          ),
+                        )
+                      }
+                    />
                   ))}
-                </tbody>
-              </table>
+                </div>
+              )}
             </div>
-          </div>
+          )}
+
+          {/* ── Tabel ukuran + part number (isi sub-folder, atau semua ukuran bila "Semua") ── */}
+          {(!selectedMaterialType || activeGramSupplier) && (
+            <div className="card overflow-hidden">
+              {selectedMaterialType && (
+                <div className={`px-4 py-2 border-b text-xs font-medium flex items-center gap-2 ${getMeta(selectedMaterialType).bg} ${getMeta(selectedMaterialType).color}`}>
+                  <Folder className="w-3.5 h-3.5" />
+                  {activeGramSupplier ? (
+                    <>
+                      <button
+                        type="button"
+                        onClick={() => setSelectedGramSupplier(null)}
+                        title="Kembali ke daftar gramatur & supplier"
+                        className="inline-flex items-center gap-0.5 hover:underline"
+                      >
+                        <ArrowLeft className="w-3.5 h-3.5" />
+                        {materialTypeLabel(selectedMaterialType)}
+                      </button>
+                      <ChevronRight className="w-3.5 h-3.5 opacity-60" />
+                      <span>
+                        {formatGramatur(activeGramSupplier.gramatur)} · {activeGramSupplier.supplier} ({tableGroups.length} ukuran)
+                      </span>
+                    </>
+                  ) : (
+                    <span>
+                      Menampilkan folder: {materialTypeLabel(selectedMaterialType)} ({tableGroups.length} ukuran)
+                    </span>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() =>
+                      runExport('TABLE', () =>
+                        exportMaterialTypePdf(
+                          activeGramSupplier
+                            ? `${materialTypeLabel(selectedMaterialType)} · ${formatGramatur(activeGramSupplier.gramatur)} · ${activeGramSupplier.supplier}`
+                            : selectedMaterialType,
+                          tableGroups,
+                          exportMeta,
+                        ),
+                      )
+                    }
+                    disabled={exportingKey !== null}
+                    className="ml-auto inline-flex items-center gap-1 px-2 py-1 rounded border border-gray-300 bg-white text-gray-700 hover:bg-gray-50 disabled:opacity-50"
+                  >
+                    {exportingKey === 'TABLE' ? (
+                      <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                    ) : (
+                      <FileDown className="w-3.5 h-3.5" />
+                    )}
+                    {exportingKey === 'TABLE' ? 'Menyiapkan...' : 'Export PDF'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setSelectedGramSupplier(null);
+                      setSelectedMaterialType(null);
+                    }}
+                    className="text-gray-400 hover:text-gray-600"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+              )}
+              <div className="overflow-x-auto">
+                <table className="w-full text-sm text-left">
+                  <thead className="text-xs text-gray-500 uppercase bg-gray-50/80">
+                    <tr>
+                      <th className="px-4 py-3 w-10"></th>
+                      <th className="px-4 py-3 font-semibold">Ukuran Material</th>
+                      <th className="px-4 py-3 font-semibold">Gramatur</th>
+                      <th className="px-4 py-3 font-semibold">Supplier</th>
+                      <th className="px-4 py-3 font-semibold text-center">Lead Time</th>
+                      <th className="px-4 py-3 font-semibold">Estimasi Pengadaan</th>
+                      <th className="px-4 py-3 font-semibold text-right">Total Sheet Beli</th>
+                      <th className="px-4 py-3 font-semibold text-right">Total Kg Beli</th>
+                      <th className="px-4 py-3 font-semibold">Status</th>
+                      <th className="px-4 py-3 font-semibold text-center">Detail</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {tableGroups.map((group, idx) => (
+                      <GroupRow key={`${group.ukuran}-${group.gramatur}-${idx}`} group={group} />
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          )}
         </>
       )}
 

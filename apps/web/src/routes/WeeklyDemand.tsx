@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { useWeeklyScheduleSummary, useBulkUpsertWeeklySchedule, useUpdateWeeklySchedule, useDeleteWeeklySchedule, useBulkDeleteWeeklySchedule } from '../hooks/useWeeklySchedule';
-import { usePeriods, useCreatePeriod, monthLabel, MODULE_LABELS, type DataModule } from '../hooks/usePeriods';
+import { usePeriods, useCreatePeriod, useUpdatePeriod, useDeletePeriod, monthLabel, MODULE_LABELS, type DataModule } from '../hooks/usePeriods';
 import { PeriodSelect } from '../components/PeriodSelect';
 import { ModuleSelect } from '../components/ModuleSelect';
 import { useItems, useCreateItem } from '../hooks/useItems';
@@ -26,6 +26,30 @@ function getNextSaturdayISO(): string {
   const offset = (6 - d.getDay() + 7) % 7 || 7; // strictly future Saturday
   d.setDate(d.getDate() + offset);
   return d.toISOString().split('T')[0];
+}
+
+/**
+ * Apakah minggu ini sudah lewat (weekEnd < hari ini)?
+ *
+ * Dipakai HANYA untuk penanda visual "Lewat" pada header kolom. Datanya TIDAK
+ * dihapus/disembunyikan — minggu yang sudah lewat tetap tampil lengkap.
+ */
+function isWeekPast(startDate: string | undefined | null): boolean {
+  if (!startDate) return false;
+  const start = new Date(startDate.slice(0, 10) + 'T00:00:00');
+  if (Number.isNaN(start.getTime())) return false;
+  const end = new Date(start.getTime() + 6 * 86400000);
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  return end.getTime() < today.getTime();
+}
+
+/** "19 Sep 2026" dari string tanggal (aman untuk tanggal saja). */
+function formatFullDate(value: string | undefined | null): string {
+  if (!value) return '';
+  const d = new Date(value.slice(0, 10) + 'T00:00:00');
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
 }
 
 // ─── Excel Parser ────────────────────────────────────────────────────────────
@@ -164,6 +188,33 @@ export function WeeklyDemand() {
     }
   };
 
+  const updatePeriod = useUpdatePeriod();
+  const deletePeriod = useDeletePeriod();
+  const [editingPeriodId, setEditingPeriodId] = useState<string | null>(null);
+  const [editPeriodMonth, setEditPeriodMonth] = useState('');
+
+  const handleUpdatePeriod = async (id: string) => {
+    if (!editPeriodMonth) return;
+    try {
+      await updatePeriod.mutateAsync({ id, data: { uploadMonth: editPeriodMonth } });
+      setEditingPeriodId(null);
+      setEditPeriodMonth('');
+    } catch (error: any) {
+      alert(error.message || 'Gagal mengubah periode.');
+    }
+  };
+
+  const handleDeletePeriod = async (id: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    if (!confirm('Yakin ingin menghapus periode ini? Semua data di dalamnya akan terhapus.')) return;
+    try {
+      await deletePeriod.mutateAsync(id);
+      if (selectedPeriodId === id) setSelectedPeriodId(null);
+    } catch (error: any) {
+      alert(error.message || 'Gagal menghapus periode.');
+    }
+  };
+
   // Manual add form state — uses an actual start date so the entry lines up
   // with the dynamic W1-W26 view (relative to today).
   const [formData, setFormData] = useState({
@@ -240,17 +291,27 @@ export function WeeklyDemand() {
 
   const ROWS_PER_PAGE = 50;
 
-  // All week numbers present in data
+  // Kalender kolom minggu dari backend (dibangun dari DATA import, bukan hari ini).
+  // Kalau backend belum mengirimnya (versi lama), turunkan dari data yang ada.
+  const weekCalendar = useMemo(() => summaryData?.weeks ?? [], [summaryData]);
+
+  // All week numbers present in the period
   const allWeeks = useMemo(() => {
+    if (weekCalendar.length > 0) return weekCalendar.map((w) => w.weekNumber);
     const wSet = new Set<number>();
     allData.forEach((row) => Object.keys(row.weeks).forEach((w) => wSet.add(Number(w))));
     return Array.from(wSet).sort((a, b) => a - b);
-  }, [allData]);
+  }, [weekCalendar, allData]);
 
-  // Map relative week number -> weekStartDate (taken from the first row that has it).
+  // Map relative week number -> weekStartDate. Diutamakan kalender backend,
+  // supaya minggu tanpa demand pun tetap punya label tanggal yang benar.
   // Used to render the small date label under each W column header.
   const weekStartByNumber = useMemo(() => {
     const map: Record<number, string> = {};
+    for (const w of weekCalendar) {
+      if (w.weekStartDate) map[w.weekNumber] = w.weekStartDate;
+    }
+    if (Object.keys(map).length > 0) return map;
     for (const row of allData) {
       for (const [w, info] of Object.entries(row.weeks)) {
         const wn = Number(w);
@@ -258,7 +319,16 @@ export function WeeklyDemand() {
       }
     }
     return map;
-  }, [allData]);
+  }, [weekCalendar, allData]);
+
+  // Tanggal W1 (minggu pertama file import) + label periode untuk header.
+  const firstWeekStart = allWeeks.length > 0 ? weekStartByNumber[allWeeks[0]] : null;
+  const lastWeekStart = allWeeks.length > 0 ? weekStartByNumber[allWeeks[allWeeks.length - 1]] : null;
+  const firstWeekLabel = formatFullDate(firstWeekStart);
+  const lastWeekLabel = formatFullDate(lastWeekStart);
+  const periodRangeText = firstWeekLabel
+    ? `26 minggu dari ${firstWeekLabel}${lastWeekLabel ? ` s/d ${lastWeekLabel}` : ''}`
+    : '26 minggu';
 
   // List of available weeks for the dropdown select in the form
   const availableWeeks = useMemo(() => {
@@ -480,12 +550,16 @@ export function WeeklyDemand() {
           <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
             <CalendarRange size={24} /> 26-Week Demand Plan
           </h2>
-          <p className="text-muted-foreground text-sm">Rencana kebutuhan produksi selama 26 minggu ke depan.</p>
+          <p className="text-muted-foreground text-sm">
+            {firstWeekLabel
+              ? `Rencana kebutuhan produksi 26 minggu dari ${firstWeekLabel}${lastWeekLabel ? ` s/d ${lastWeekLabel}` : ''} (mengikuti periode data yang diupload).`
+              : 'Rencana kebutuhan produksi selama 26 minggu.'}
+          </p>
         </div>
         <div className="flex items-center gap-3">
           <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground border rounded-md px-3 h-9">
             <Calendar size={14} />
-            <span>26 minggu ke depan dari hari ini</span>
+            <span>{firstWeekLabel ? periodRangeText : '26 minggu'}</span>
           </div>
           {isAdmin && (
             <button onClick={() => setShowImport(true)} className="bg-secondary border hover:bg-secondary/80 px-4 py-2 rounded-md font-medium text-sm flex items-center gap-2 transition-colors">
@@ -595,11 +669,40 @@ export function WeeklyDemand() {
             </div>
           )}
           <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-            {periods.map((p) => (
+            {periods.map((p) => {
+              if (editingPeriodId === p.id) {
+                return (
+                  <div key={p.id} className="p-5 border-2 border-primary rounded-lg bg-card flex flex-col gap-3 justify-center shadow-sm relative">
+                    <div className="text-sm font-semibold mb-1 flex items-center gap-2"><Edit2 className="w-4 h-4" /> Edit Periode</div>
+                    <input
+                      type="month"
+                      value={editPeriodMonth}
+                      onChange={(e) => setEditPeriodMonth(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    <div className="flex gap-2">
+                      <button
+                        onClick={() => handleUpdatePeriod(p.id)}
+                        disabled={updatePeriod.isPending}
+                        className="flex-1 bg-primary text-primary-foreground hover:bg-primary/90 px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center"
+                      >
+                        {updatePeriod.isPending ? <Loader2 size={16} className="animate-spin" /> : 'Simpan'}
+                      </button>
+                      <button
+                        onClick={() => { setEditingPeriodId(null); setEditPeriodMonth(''); }}
+                        className="flex-1 bg-secondary text-secondary-foreground hover:bg-secondary/80 px-3 py-2 rounded-md text-sm font-medium"
+                      >
+                        Batal
+                      </button>
+                    </div>
+                  </div>
+                );
+              }
+              return (
               <div
                 key={p.id}
                 onClick={() => setSelectedPeriodId(p.id)}
-                className="cursor-pointer p-5 border rounded-lg bg-card hover:bg-muted/50 hover:border-primary/50 transition-all flex items-center gap-4 group shadow-sm"
+                className="cursor-pointer p-5 border rounded-lg bg-card hover:bg-muted/50 hover:border-primary/50 transition-all flex items-center gap-4 group shadow-sm relative overflow-hidden pr-12"
               >
                 <div className="p-3 bg-blue-500/10 rounded-lg group-hover:bg-blue-500/20 transition-colors">
                   <Folder className="w-8 h-8 text-blue-500 fill-blue-500/20" />
@@ -613,8 +716,30 @@ export function WeeklyDemand() {
                     {p.moduleCounts[moduleType].MRP} baris MRP {MODULE_LABELS[moduleType]}
                   </p>
                 </div>
+                {isAdmin && (
+                  <div className="absolute right-2 top-1/2 -translate-y-1/2 flex flex-col gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        setEditingPeriodId(p.id);
+                        setEditPeriodMonth(p.uploadMonth);
+                      }}
+                      className="p-1.5 bg-background border rounded-md text-muted-foreground hover:text-blue-600 hover:border-blue-200 transition-colors shadow-sm"
+                      title="Edit Periode"
+                    >
+                      <Edit2 className="w-3.5 h-3.5" />
+                    </button>
+                    <button
+                      onClick={(e) => handleDeletePeriod(p.id, e)}
+                      className="p-1.5 bg-background border rounded-md text-muted-foreground hover:text-red-600 hover:border-red-200 transition-colors shadow-sm"
+                      title="Hapus Periode"
+                    >
+                      <Trash2 className="w-3.5 h-3.5" />
+                    </button>
+                  </div>
+                )}
               </div>
-            ))}
+            )})}
 
             <div className="p-5 border-2 border-dashed rounded-lg bg-card flex flex-col gap-3 justify-center">
               <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
@@ -649,6 +774,11 @@ export function WeeklyDemand() {
           </button>
           <h3 className="font-semibold text-lg">
             {selectedPeriod?.label ?? 'Periode'} (26-Week Demand Plan)
+            {firstWeekLabel && (
+              <span className="ml-2 text-sm font-normal text-muted-foreground">
+                26 minggu dari {firstWeekLabel}
+              </span>
+            )}
           </h3>
         </div>
       <div className="bg-card text-card-foreground border rounded-lg shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
@@ -712,10 +842,13 @@ export function WeeklyDemand() {
                   const startLabel = start
                     ? new Date(start).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
                     : '';
+                  // Minggu yang sudah lewat tetap tampil — hanya diberi penanda.
+                  const past = isWeekPast(start);
                   return (
-                    <th key={w} className="px-3 py-1 text-center min-w-[80px]">
+                    <th key={w} className={`px-3 py-1 text-center min-w-[80px] ${past ? 'bg-muted/40' : ''}`}>
                       <div className="font-bold">W{w}</div>
                       {startLabel && <div className="text-[10px] font-normal normal-case text-muted-foreground/80">{startLabel}</div>}
+                      {past && <div className="text-[9px] font-medium normal-case text-amber-600">Lewat</div>}
                     </th>
                   );
                 })}
@@ -815,7 +948,12 @@ export function WeeklyDemand() {
 
         {filteredData.length > 0 && (
           <div className="px-4 py-3 border-t bg-muted/10 flex items-center justify-between text-xs text-muted-foreground">
-            <span>Menampilkan {filteredData.length} item · {allWeeks.length} minggu</span>
+            <span>
+              Menampilkan {filteredData.length} item · {allWeeks.length} minggu
+              <span className="ml-1 normal-case">
+                (seluruh periode data import; minggu yang sudah lewat ditandai <span className="font-medium text-amber-600">Lewat</span>)
+              </span>
+            </span>
             {totalRowPages > 1 && (
               <div className="flex items-center gap-2">
                 <button

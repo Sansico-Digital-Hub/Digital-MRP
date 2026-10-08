@@ -6,10 +6,28 @@ import {
   resolveUploadPeriod,
   recordPeriodChange,
   touchPeriod,
+  recomputeMrpRange,
   requireModuleType,
   parseModuleType,
   resolveModuleType,
 } from '../lib/periodScope';
+
+/**
+ * Segarkan `PlanningCycle.mrpStartDate/mrpEndDate` bila baris yang berubah milik
+ * modul MATERIAL — rentang itu dasar timeline Material Calculation.
+ *
+ * Dipanggil SETELAH penulisan data supaya nilainya selalu = MIN/MAX data nyata,
+ * bukan hanya batch terakhir (bug 2026-10-06: periode September 2026 sempat
+ * menyimpan 5–11 Jan 2032 padahal datanya 19 Sep 2026 – 13 Mar 2027).
+ */
+async function refreshMrpRangeFor(periodId: string, moduleType: string | null | undefined) {
+  if (moduleType !== 'MATERIAL') return;
+  const { start, end } = await recomputeMrpRange(periodId);
+  await prisma.planningCycle.update({
+    where: { id: periodId },
+    data: { mrpStartDate: start, mrpEndDate: end },
+  });
+}
 
 export default async function weeklyScheduleRoutes(server: FastifyInstance) {
   // GET /api/v1/weekly-schedule — bisa difilter per periode + modul:
@@ -42,8 +60,19 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
     return reply.send({ data: schedules });
   });
 
-  // GET /api/v1/weekly-schedule/summary - Group by item, with W1-W26 relative to today.
-  // W1 = first week whose weekStartDate >= today (today aligned to 00:00).
+  // GET /api/v1/weekly-schedule/summary
+  //
+  // Ringkasan MRP 26 minggu untuk SATU periode + SATU modul.
+  //
+  // PENTING (perbaikan 2026-10-08): kolom minggu (W1..W26) dibangun dari DATA
+  // YANG DIUPLOAD, bukan dari tanggal hari ini. Sebelumnya endpoint ini membuang
+  // minggu yang sudah lewat (`weekStartDate >= today`) lalu menomori ulang sisanya
+  // dari 1 — akibatnya W1 bergeser ke minggu berikutnya dan angka tiap minggu tidak
+  // lagi sama dengan file Excel. Sekarang:
+  //   • TIDAK ADA filter tanggal — semua minggu yang tersimpan tetap tampil.
+  //   • W1 = minggu paling awal di data import; W2, W3, ... mengikuti kalender 7 hari.
+  //   • Posisi minggu tiap baris dihitung dari SELISIH TANGGAL terhadap W1 (bukan
+  //     `weekNumber - 1`) supaya tetap benar walau penomoran minggu di data berbeda.
   server.get('/api/v1/weekly-schedule/summary', { preValidation: [authenticate] }, async (request, reply) => {
     // Ringkasan WAJIB per periode — tanpa ini demand beberapa bulan akan tercampur.
     // moduleType menentukan modul mana yang dibaca (Production vs Material).
@@ -56,38 +85,51 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
     }
     const module = resolveModuleType(moduleType);
 
-    const today = new Date();
-    today.setUTCHours(0, 0, 0, 0);
-
-    // Fetch only schedules whose week has not ended yet (anchor = today).
-    // Sorting by weekStartDate gives chronological order.
+    // Ambil SELURUH baris periode + modul ini. Tidak difilter tanggal.
     const schedules = await prisma.weeklySchedule.findMany({
-      where: { periodId, moduleType: module, weekStartDate: { gte: today } },
+      where: { periodId, moduleType: module },
       include: { item: true },
-      orderBy: [{ weekStartDate: 'asc' }],
+      orderBy: [{ weekStartDate: 'asc' }, { weekNumber: 'asc' }],
     });
 
-    // Map every distinct weekStartDate to a relative position (W1, W2, ...).
-    const uniqueStarts: number[] = [];
-    const seenStarts = new Set<number>();
+    // Jumlah kolom minggu (sesuai rancangan: 26 minggu).
+    const weekCount = 26;
+
+    // W1 = minggu paling awal yang ada di data (= start date di file import).
+    let periodStart: Date | null = null;
     for (const s of schedules) {
-      const ts = s.weekStartDate.getTime();
-      if (!seenStarts.has(ts)) {
-        seenStarts.add(ts);
-        uniqueStarts.push(ts);
+      if (!periodStart || s.weekStartDate.getTime() < periodStart.getTime()) {
+        periodStart = s.weekStartDate;
       }
     }
-    uniqueStarts.sort((a, b) => a - b);
-    const limitedStarts = uniqueStarts.slice(0, 26); // cap at 26 weeks
-    const relWeekByStart: Record<number, number> = {};
-    limitedStarts.forEach((ts, idx) => {
-      relWeekByStart[ts] = idx + 1;
-    });
+
+    // Kalender kolom minggu, dibangun dari W1 selama 26 minggu. Kolom tetap dibuat
+    // walau tidak ada demand di minggu itu supaya header "W1 – 19 Sep" selalu
+    // tampil pada posisi yang benar dan tidak bergeser.
+    const columns: { weekNumber: number; weekStartDate: string; weekEndDate: string }[] = [];
+    if (periodStart) {
+      for (let i = 0; i < weekCount; i += 1) {
+        const start = new Date(periodStart.getTime() + i * 7 * 86400000);
+        columns.push({
+          weekNumber: i + 1,
+          weekStartDate: start.toISOString(),
+          weekEndDate: new Date(start.getTime() + 6 * 86400000).toISOString(),
+        });
+      }
+    }
+
+    // Posisi (1..weekCount) tiap baris = selisih tanggal terhadap W1 dibagi 7 hari.
+    const relWeekOf = (start: Date): number => {
+      if (!periodStart) return 0;
+      const diffDays = Math.round((start.getTime() - periodStart.getTime()) / 86400000);
+      const idx = Math.round(diffDays / 7) + 1;
+      return idx >= 1 && idx <= weekCount ? idx : 0; // 0 = di luar rentang 26 minggu
+    };
 
     const itemMap: Record<string, any> = {};
     for (const s of schedules) {
-      const relW = relWeekByStart[s.weekStartDate.getTime()];
-      if (!relW) continue; // beyond W26
+      const relW = relWeekOf(s.weekStartDate);
+      if (!relW) continue; // di luar rentang W1..W26
       if (!itemMap[s.itemId]) {
         itemMap[s.itemId] = {
           itemId: s.itemId,
@@ -98,16 +140,30 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
           total: 0,
         };
       }
-      itemMap[s.itemId].weeks[relW] = {
-        id: s.id,
-        quantity: s.quantity,
-        weekStartDate: s.weekStartDate,
-        weekEndDate: s.weekEndDate,
-      };
+      // Kalau ada dua baris dengan minggu yang sama, jumlahkan (jaga-jaga).
+      const existing = itemMap[s.itemId].weeks[relW];
+      if (existing) {
+        existing.quantity += s.quantity;
+      } else {
+        itemMap[s.itemId].weeks[relW] = {
+          id: s.id,
+          quantity: s.quantity,
+          weekStartDate: s.weekStartDate,
+          weekEndDate: s.weekEndDate,
+        };
+      }
       itemMap[s.itemId].total += s.quantity;
     }
 
-    return reply.send({ data: Object.values(itemMap), year: today.getFullYear(), moduleType: module });
+    return reply.send({
+      data: Object.values(itemMap),
+      year: (periodStart ?? new Date()).getUTCFullYear(),
+      moduleType: module,
+      // Kalender kolom minggu (W1..W26) — dipakai frontend untuk header + badge
+      // "Lewat". Terpisah dari data supaya minggu tanpa demand tetap punya kolom.
+      weeks: columns,
+      periodStart: periodStart ? periodStart.toISOString() : null,
+    });
   });
 
   // POST /api/v1/weekly-schedule (single upsert)
@@ -194,6 +250,7 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
       });
 
       await touchPeriod(periodId);
+      await refreshMrpRangeFor(periodId, moduleType);
 
       await prisma.auditLog.create({
         data: {
@@ -390,16 +447,8 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
         { timeout: 30000 },
       );
 
-      // Rentang tanggal MRP untuk periode ini (dipakai sebagai dasar timeline kalkulasi).
-      let mrpStart: Date | null = null;
-      let mrpEnd: Date | null = null;
-      for (const r of validRecords) {
-        const start = r.weekStartDate ? new Date(r.weekStartDate) : null;
-        const end = r.weekEndDate ? new Date(r.weekEndDate) : start;
-        if (start && (!mrpStart || start < mrpStart)) mrpStart = start;
-        if (end && (!mrpEnd || end > mrpEnd)) mrpEnd = end;
-      }
-
+      // Rentang tanggal MRP diperbarui di dalam `recordPeriodChange` — nilainya
+      // dihitung ulang dari SELURUH data periode, bukan batch ini saja.
       await recordPeriodChange({
         periodId,
         userId: request.user!.id,
@@ -408,8 +457,6 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
         rowCount: createdCount + updatedCount,
         replaced: previousCount,
         mode: saveMode === 'add' ? 'add' : 'overwrite',
-        mrpStartDate: mrpStart,
-        mrpEndDate: mrpEnd,
       });
 
       return reply.code(200).send({
@@ -461,6 +508,7 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
       });
 
       await touchPeriod(existing.periodId);
+      await refreshMrpRangeFor(existing.periodId, existing.moduleType);
       return reply.send({ data: schedule });
     }
   );
@@ -493,6 +541,10 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
       });
 
       for (const periodId of periodIds) await touchPeriod(periodId);
+      for (const periodId of periodIds) {
+        const mod = affected.find((s) => s.periodId === periodId)?.moduleType;
+        await refreshMrpRangeFor(periodId, mod);
+      }
 
       await prisma.auditLog.create({
         data: {
@@ -524,6 +576,7 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
       }
       await prisma.weeklySchedule.delete({ where: { id } });
       await touchPeriod(existing.periodId);
+      await refreshMrpRangeFor(existing.periodId, existing.moduleType);
       return reply.send({ message: 'Deleted successfully' });
     }
   );

@@ -14,6 +14,11 @@ export interface OutstandingPOData {
   qtyOrderUnit: string;
   qtyDelivered: number;
   qtyDeliveredUnit: string;
+  /**
+   * Referensi customer dari kolom Excel `PR Ref-B`. Hanya baris yang nilainya
+   * mengandung "MTL" yang masuk ke sistem. `null` untuk data lama.
+   */
+  refB: string | null;
   createdAt: string;
   updatedAt: string;
 }
@@ -30,7 +35,20 @@ export interface OutstandingPOUploadResult {
   message: string;
   data: Omit<OutstandingPOData, 'id' | 'periodId' | 'createdAt' | 'updatedAt'>[];
   errors: OutstandingPOImportError[];
-  summary: { total: number; valid: number; failed: number };
+  summary: {
+    /** Total baris data di file (sebelum filter MTL). */
+    totalRows: number;
+    /** Baris masuk: kolom "PR Ref-B" mengandung "MTL". */
+    included: number;
+    /** Baris dilewati: kolom "PR Ref-B" TIDAK mengandung "MTL". */
+    skippedNoMtl: number;
+    /** Baris gagal karena validasi lain (mis. PO NO kosong). */
+    failed: number;
+    /** Baris kosong / subtotal / "Grand Total" (info tambahan). */
+    skippedNonData: number;
+    total: number;
+    valid: number;
+  };
 }
 
 /**

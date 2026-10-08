@@ -447,6 +447,61 @@ export function useNpofCheck(cycleId: string | null, enabled = true) {
   });
 }
 
+// ── Cakupan NPOF: part MRP yang tidak ada / kurang lengkap di NPOF ─────────
+
+export type NpofRequiredField = 'gramatur' | 'ukuran' | 'formula' | 'ups' | 'material' | 'supplier';
+
+/** Label tampilan untuk tiap field NPOF yang bisa kosong. */
+export const NPOF_FIELD_LABELS: Record<NpofRequiredField, string> = {
+  gramatur: 'Gramatur',
+  ukuran: 'Ukuran sheet',
+  formula: 'Formula material',
+  ups: 'Ups',
+  material: 'Jenis material',
+  supplier: 'Supplier',
+};
+
+export interface NpofCoverageRow {
+  partNumber: string;
+  productName: string;
+  /** MISSING = tidak ada baris NPOF; INCOMPLETE = ada tapi ada field kosong. */
+  status: 'MISSING' | 'INCOMPLETE';
+  /** true = formula/ups kosong, sehingga kg part ini hanya estimasi. */
+  critical: boolean;
+  demandWeekCount: number;
+  npofId: number | null;
+  material: string | null;
+  materialType: string | null;
+  supplier: string | null;
+  gramatur: string | null;
+  ukuran: string | null;
+  missingFields: NpofRequiredField[];
+  isNebeng: boolean;
+}
+
+export interface NpofCoverageData {
+  summary: {
+    mrpPartCount: number;
+    missingNpofCount: number;
+    incompleteNpofCount: number;
+    completeNpofCount: number;
+    criticalCount: number;
+  };
+  rows: NpofCoverageRow[];
+  npofTotalRows: number;
+  periodLabel: string;
+}
+
+/** Part MRP periode ini yang tidak ada / datanya kurang di NPOF. */
+export function useNpofCoverage(cycleId: string | null) {
+  return useQuery<{ data: NpofCoverageData }, Error>({
+    queryKey: ['material-planning-npof-coverage', cycleId],
+    queryFn: () => fetchApi(`/material-planning/cycles/${cycleId}/npof-coverage`),
+    enabled: Boolean(cycleId),
+    staleTime: 30 * 1000,
+  });
+}
+
 export function useCalculateCycle() {
   const queryClient = useQueryClient();
   return useMutation<{ data: CycleCalculationResult }, Error, { cycleId: string }>({

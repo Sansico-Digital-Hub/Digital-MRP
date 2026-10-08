@@ -95,11 +95,57 @@ export default async function usersRoutes(server: FastifyInstance) {
   );
 
   // Delete user
+  //
+  // User yang sudah punya RIWAYAT (audit log, stok FG, WIP, hasil perhitungan)
+  // TIDAK bisa dihapus karena foreign key `restrict` — dulu ini meledak jadi
+  // HTTP 500 `P2003 Foreign key constraint violated: userId`. Sekarang diperiksa
+  // lebih dulu dan dijawab 409 dengan saran menonaktifkan user (kolom `isActive`),
+  // supaya jejak audit tetap utuh.
   server.delete(
     '/api/v1/users/:id',
     { preValidation: [authenticate, requireRole(['SUPER_ADMIN'])] },
     async (request, reply) => {
       const { id } = request.params as { id: string };
+
+      const user = await prisma.user.findUnique({ where: { id } });
+      if (!user) {
+        return reply.code(404).send({ error: 'Not Found', message: 'User tidak ditemukan.' });
+      }
+
+      if (user.id === request.user!.id) {
+        return reply
+          .code(409)
+          .send({ error: 'Conflict', message: 'Anda tidak bisa menghapus akun yang sedang dipakai.' });
+      }
+
+      const [auditLogs, cycleAuditLogs, fgStocks, fgStockHistory, wips, calculationHistories] =
+        await Promise.all([
+          prisma.auditLog.count({ where: { userId: id } }),
+          prisma.cycleAuditLog.count({ where: { userId: id } }),
+          prisma.fGStock.count({ where: { updatedBy: id } }),
+          prisma.fGStockHistory.count({ where: { createdBy: id } }),
+          prisma.wIP.count({ where: { updatedBy: id } }),
+          prisma.calculationHistory.count({ where: { savedBy: id } }),
+        ]);
+
+      const blockers = [
+        auditLogs > 0 ? `${auditLogs} audit log` : null,
+        cycleAuditLogs > 0 ? `${cycleAuditLogs} riwayat periode` : null,
+        fgStocks > 0 ? `${fgStocks} stok FG` : null,
+        fgStockHistory > 0 ? `${fgStockHistory} riwayat stok FG` : null,
+        wips > 0 ? `${wips} data WIP` : null,
+        calculationHistories > 0 ? `${calculationHistories} hasil perhitungan` : null,
+      ].filter(Boolean) as string[];
+
+      if (blockers.length > 0) {
+        return reply.code(409).send({
+          error: 'Conflict',
+          message:
+            `User "${user.name}" tidak bisa dihapus karena masih terhubung ke data lain: ${blockers.join(', ')}. ` +
+            'Nonaktifkan saja user ini (isActive = false) supaya riwayat tetap utuh.',
+        });
+      }
+
       await prisma.user.delete({ where: { id } });
       return reply.send({ message: 'User deleted successfully' });
     }

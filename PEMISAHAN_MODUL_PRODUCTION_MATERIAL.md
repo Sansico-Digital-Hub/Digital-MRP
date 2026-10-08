@@ -359,7 +359,49 @@ pnpm --filter @pdits/web exec tsc -b
 
 ---
 
-## 8. Catatan Operasional
+## 8. Integrasi dengan Role Planner (tambahan 2026-09-29)
+
+Setelah pemisahan ini, aplikasi menambah peran **Production Planner** dan
+**Material Planner** yang memanfaatkan `moduleType` sebagai batas wewenang.
+
+- `apps/api/src/lib/permissions.ts` — sumber kebenaran hak akses di API.
+  `allowedDataModules(role)` → planner hanya modulnya; `requireModuleAccess()`
+  adalah guard untuk endpoint tulis tabel bersama (`weekly-schedules`, `wips`).
+- Dipasang di `weeklySchedule.ts` & `wip.ts` pada endpoint tulis:
+  `requireRole(EDIT_ROLES.shared)` + `requireModuleAccess()`.
+- Enum `UserRole` diperluas lewat migrasi `20260929010000_planner_roles`.
+- Frontend: `authStore.ts` (`lockedDataModule`, `editableDataModules`,
+  `masterDataScopeForRole`) memakai matriks yang sama; UI hanya menyembunyikan,
+  **penegakan tetap di API**.
+
+Perilaku terverifikasi:
+
+| Aksi | Hasil |
+|---|---|
+| Material Planner upload MRP ke `moduleType=MATERIAL` | 200 |
+| Material Planner upload MRP ke `moduleType=PRODUCTION` | **403** + pesan "Role Anda hanya boleh mengubah data Material Planning…" |
+| Production Planner upload MRP ke `moduleType=PRODUCTION` | 200 |
+| Production Planner upload MRP ke `moduleType=MATERIAL` | **403** |
+| POST /users `role=MATERIAL_PLANNER` | 201 |
+| POST /users `role=SUPERVISOR` | **400** + daftar role yang tersedia |
+
+> ⚠️ **Prasyarat:** setelah mengubah `enum UserRole` di `schema.prisma`, WAJIB
+> menjalankan `npx prisma generate`. Prisma Client yang basi menolak SEMUA role
+> baru dengan `PrismaClientValidationError: Invalid value for argument 'role'`
+> dan endpoint melempar HTTP 500 — inilah penyebab insiden 2026-09-29.
+
+### Perbaikan bug tambahan (2026-09-29)
+
+`DELETE /api/v1/users/:id` sebelumnya melempar **HTTP 500** `P2003 Foreign key
+constraint violated: userId` saat user punya riwayat (audit log, WIP, stok FG,
+hasil perhitungan). Sekarang diperiksa lebih dulu dan dijawab **409** dengan
+daftar penyebab + saran menonaktifkan user (`isActive = false`), supaya jejak
+audit tetap utuh. Hapus akun sendiri juga ditolak (409).
+Uji: `pnpm --filter @pdits/api verify:user-management` (9 pemeriksaan, LULUS).
+
+---
+
+## 9. Catatan Operasional
 
 - **Upload wajib memilih modul.** Tombol simpan di form/import tetap aktif seperti
   biasa, tetapi karena `moduleType` selalu dikirim oleh UI, tidak ada upload yang

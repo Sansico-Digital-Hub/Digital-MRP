@@ -10,7 +10,7 @@ export interface FGStock {
   updatedAt: string;
   item: {
     id: string;
-    itemCode: string;
+    partNumber: string;
     itemName: string;
   };
   user: {

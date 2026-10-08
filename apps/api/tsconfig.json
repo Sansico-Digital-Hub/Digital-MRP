@@ -22,5 +22,10 @@
     "noEmit": true
   },
   "include": ["src/**/*", "verify-*.ts"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+  /**
+   * `verify-pdf-export.ts` memakai modul PDF dari apps/web (bundler resolution +
+   * DOM lib), jadi tidak bisa ikut project ini (moduleResolution node16 + lib ES2022).
+   * Skrip tetap dijalankan dengan tsx: `pnpm --filter @pdits/api verify:pdf-export`.
+   */
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "verify-pdf-export.ts"]
 }

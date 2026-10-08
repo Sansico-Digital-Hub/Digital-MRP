@@ -305,6 +305,28 @@ export function compareSignature(stored: unknown, current: PeriodSignature) {
 }
 
 /**
+ * Rentang tanggal MRP satu periode = MIN(weekStartDate) .. MAX(weekEndDate) dari
+ * SELURUH baris MRP modul MATERIAL periode itu.
+ *
+ * ⚠️ SELALU dihitung ulang dari data nyata, JANGAN memakai min/max batch upload
+ * terakhir. Rentang ini dipakai `/calculate` sebagai `periodStartDate` (dasar
+ * penerjemahan tanggal PO -> indeks minggu). Kalau nilainya salah — mis. karena
+ * satu upload sebagian atau data uji — semua PO akan dianggap tiba di minggu 1
+ * dan hasil perhitungannya keliru. Insiden nyata: periode September 2026 sempat
+ * menyimpan 5–11 Jan 2032 padahal datanya 19 Sep 2026 – 13 Mar 2027.
+ */
+export async function recomputeMrpRange(
+  periodId: string,
+): Promise<{ start: Date | null; end: Date | null }> {
+  const agg = await prisma.weeklySchedule.aggregate({
+    where: { periodId, moduleType: 'MATERIAL' },
+    _min: { weekStartDate: true },
+    _max: { weekEndDate: true },
+  });
+  return { start: agg._min.weekStartDate ?? null, end: agg._max.weekEndDate ?? null };
+}
+
+/**
  * Catat hasil upload/penghapusan ke jejak periode:
  *  - CycleSourceUpload  (kapan, file apa, berapa baris, oleh siapa)
  *  - perbarui cap waktu PlanningCycle
@@ -324,8 +346,6 @@ export async function recordPeriodChange(params: {
    * perlu diperbarui.
    */
   moduleType?: DataModule;
-  mrpStartDate?: Date | null;
-  mrpEndDate?: Date | null;
   notes?: string;
 }) {
   const now = new Date();
@@ -347,17 +367,16 @@ export async function recordPeriodChange(params: {
   // `PlanningCycle.mrpStartDate/mrpEndDate` = dasar timeline Material Calculation,
   // jadi HANYA boleh diisi oleh upload MRP modul MATERIAL. Upload MRP modul
   // Production tidak boleh menggeser timeline perhitungan material.
-  const shouldUpdateMrpRange =
-    params.sourceType === 'MRP' && moduleType === 'MATERIAL';
+  // Nilainya dihitung ulang dari SELURUH data periode (bukan batch terakhir).
+  const shouldUpdateMrpRange = params.sourceType === 'MRP' && moduleType === 'MATERIAL';
+  const mrpRange = shouldUpdateMrpRange ? await recomputeMrpRange(params.periodId) : null;
 
   await prisma.planningCycle.update({
     where: { id: params.periodId },
     data: {
       lastUploadedAt: now,
       lastDataChangeAt: now,
-      ...(shouldUpdateMrpRange && params.mrpStartDate && params.mrpEndDate
-        ? { mrpStartDate: params.mrpStartDate, mrpEndDate: params.mrpEndDate }
-        : {}),
+      ...(mrpRange ? { mrpStartDate: mrpRange.start, mrpEndDate: mrpRange.end } : {}),
     },
   });
 

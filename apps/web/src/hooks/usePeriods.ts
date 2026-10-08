@@ -74,6 +74,35 @@ export function useCreatePeriod() {
   });
 }
 
+export function useUpdatePeriod() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: ({ id, data }: { id: string; data: { uploadMonth?: string; label?: string } }) =>
+      fetchApi(`/material-planning/cycles/${id}`, {
+        method: 'PATCH',
+        body: JSON.stringify(data),
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: PERIOD_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ['material-planning-cycles'] });
+    },
+  });
+}
+
+export function useDeletePeriod() {
+  const queryClient = useQueryClient();
+  return useMutation({
+    mutationFn: (id: string) =>
+      fetchApi(`/material-planning/cycles/${id}`, {
+        method: 'DELETE',
+      }),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: PERIOD_QUERY_KEY });
+      queryClient.invalidateQueries({ queryKey: ['material-planning-cycles'] });
+    },
+  });
+}
+
 /** Total baris semua sumber di satu periode. */
 export function periodTotal(p: PeriodSummary): number {
   return Object.values(p.counts).reduce((sum, n) => sum + n, 0);

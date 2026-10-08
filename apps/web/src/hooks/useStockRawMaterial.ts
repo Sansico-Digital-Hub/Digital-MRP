@@ -10,8 +10,27 @@ export interface StockRawMaterialData {
   unit: string;
   qty: number;
   date: string;
+  /**
+   * Referensi customer dari kolom Excel `Ref_B_PO`. Hanya baris yang nilainya
+   * mengandung "MTL" yang masuk ke sistem. `null` untuk data lama.
+   */
+  refB: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Ringkasan hasil pembacaan file Excel Stock Raw Material. */
+export interface StockRawMaterialUploadSummary {
+  /** Total baris data di file (sebelum filter MTL). */
+  totalRows: number;
+  /** Baris masuk: kolom "Ref_B_PO" mengandung "MTL". */
+  included: number;
+  /** Baris dilewati: kolom "Ref_B_PO" TIDAK mengandung "MTL". */
+  skippedNoMtl: number;
+  failed: number;
+  skippedNonData: number;
+  total: number;
+  valid: number;
 }
 
 /**
@@ -36,7 +55,11 @@ export const useUploadStockRawMaterial = () => {
     mutationFn: async (file: File) => {
       const formData = new FormData();
       formData.append('file', file);
-      const response = await fetchApi<{ message: string; data: Omit<StockRawMaterialData, 'id' | 'createdAt' | 'updatedAt'>[] }>('/stock-raw-material/upload', {
+      const response = await fetchApi<{
+        message: string;
+        data: Omit<StockRawMaterialData, 'id' | 'createdAt' | 'updatedAt'>[];
+        summary?: StockRawMaterialUploadSummary;
+      }>('/stock-raw-material/upload', {
         method: 'POST',
         body: formData,
       });
@@ -49,7 +72,7 @@ export const useAddManualStockRawMaterial = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async (data: { itemDesc: string; supplier: string; unit: string; qty: number; date: string; periodId: string }) => {
+    mutationFn: async (data: { itemDesc: string; supplier: string; unit: string; qty: number; date: string; periodId: string; refB?: string | null }) => {
       const response = await fetchApi<{ data: StockRawMaterialData }>('/stock-raw-material', {
         method: 'POST',
         body: JSON.stringify(data),
@@ -67,7 +90,7 @@ export const useUpdateStockRawMaterial = () => {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: async ({ id, data }: { id: string; data: Partial<{ itemDesc: string; supplier: string; unit: string; qty: number; date: string }> }) => {
+    mutationFn: async ({ id, data }: { id: string; data: Partial<{ itemDesc: string; supplier: string; unit: string; qty: number; date: string; refB: string | null }> }) => {
       const response = await fetchApi<{ data: StockRawMaterialData }>(`/stock-raw-material/${id}`, {
         method: 'PUT',
         body: JSON.stringify(data),
