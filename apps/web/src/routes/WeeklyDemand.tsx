@@ -8,6 +8,7 @@ import { SearchableSelect } from '../components/SearchableSelect';
 import { Upload, Search, Save, Plus, CalendarRange, Trash2, ChevronLeft, ChevronRight, Calendar, Edit2, Folder, ArrowLeft, Lock, CalendarPlus, Loader2 } from 'lucide-react';
 import * as XLSX from 'xlsx';
 import { useAuthStore, lockedDataModule } from '../stores/authStore';
+import { parse26WeekExcel, localDateFromISO, type ImportRow } from '../lib/mrpWeekImport';
 
 // Compute ISO week number / ISO year for a given date.
 // Used to build a unique (year, weekNumber) pair when manually adding demand.
@@ -28,113 +29,6 @@ function getNextSaturdayISO(): string {
   return d.toISOString().split('T')[0];
 }
 
-/**
- * Apakah minggu ini sudah lewat (weekEnd < hari ini)?
- *
- * Dipakai HANYA untuk penanda visual "Lewat" pada header kolom. Datanya TIDAK
- * dihapus/disembunyikan — minggu yang sudah lewat tetap tampil lengkap.
- */
-function isWeekPast(startDate: string | undefined | null): boolean {
-  if (!startDate) return false;
-  const start = new Date(startDate.slice(0, 10) + 'T00:00:00');
-  if (Number.isNaN(start.getTime())) return false;
-  const end = new Date(start.getTime() + 6 * 86400000);
-  const today = new Date();
-  today.setHours(0, 0, 0, 0);
-  return end.getTime() < today.getTime();
-}
-
-/** "19 Sep 2026" dari string tanggal (aman untuk tanggal saja). */
-function formatFullDate(value: string | undefined | null): string {
-  if (!value) return '';
-  const d = new Date(value.slice(0, 10) + 'T00:00:00');
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
-}
-
-// ─── Excel Parser ────────────────────────────────────────────────────────────
-interface ImportWeekData {
-  weekNumber: number;
-  weekStartDate: string; // YYYY-MM-DD
-  quantity: number;
-}
-
-interface ImportRow {
-  id: string;
-  itemCode: string;
-  description: string;
-  weeks: ImportWeekData[];
-  total: number;
-}
-
-function excelSerialToDate(serial: number): string {
-  const utcDays = Math.floor(serial - 25569);
-  const d = new Date(utcDays * 86400 * 1000);
-  return d.toISOString().split('T')[0];
-}
-
-/**
- * Parse the 26-week demand Excel (26Weeks.xlsx format):
- *   Row 0: blank, blank, blank, 1, 2, 3 … 26  (week numbers at cols 3+)
- *   Row 1: "PN", "Description", "Total", date1, date2 … (Excel serial dates at cols 3+)
- *   Row 2+: itemCode, description, total, qty1, qty2 …
- */
-function parse26WeekExcel(ws: XLSX.WorkSheet): { rows: ImportRow[]; year: number } {
-  const range = XLSX.utils.decode_range(ws['!ref'] || 'A1');
-
-  // Find header row where col 0 = "PN"
-  let headerRow = -1;
-  for (let r = 0; r <= Math.min(10, range.e.r); r++) {
-    const cell = ws[XLSX.utils.encode_cell({ r, c: 0 })];
-    if (cell && String(cell.v).trim().toUpperCase() === 'PN') { headerRow = r; break; }
-  }
-  if (headerRow === -1) return { rows: [], year: new Date().getFullYear() };
-
-  // Week numbers are in the row ABOVE the header row (cols 3+)
-  const weekNumRow = headerRow > 0 ? headerRow - 1 : -1;
-
-  const weekColumns: { col: number; weekNumber: number; weekStartDate: string }[] = [];
-  for (let c = 3; c <= range.e.c; c++) {
-    const wCell = weekNumRow >= 0 ? ws[XLSX.utils.encode_cell({ r: weekNumRow, c })] : null;
-    const dCell = ws[XLSX.utils.encode_cell({ r: headerRow, c })];
-    if (!wCell || wCell.t !== 'n') continue;
-    const weekNum = Math.round(wCell.v);
-    if (weekNum < 1 || weekNum > 52) continue;
-    let startDate = '';
-    if (dCell && typeof dCell.v === 'number' && dCell.v > 40000) startDate = excelSerialToDate(dCell.v);
-    weekColumns.push({ col: c, weekNumber: weekNum, weekStartDate: startDate });
-  }
-
-  if (weekColumns.length === 0) return { rows: [], year: new Date().getFullYear() };
-  let year = new Date().getFullYear();
-  if (weekColumns[0].weekStartDate) year = parseInt(weekColumns[0].weekStartDate.split('-')[0]);
-
-  const rows: ImportRow[] = [];
-  let idCounter = 0;
-  for (let r = headerRow + 1; r <= range.e.r; r++) {
-    const cellPN = ws[XLSX.utils.encode_cell({ r, c: 0 })];
-    const cellDesc = ws[XLSX.utils.encode_cell({ r, c: 1 })];
-    const itemCode = cellPN ? String(cellPN.v).trim() : '';
-    const description = cellDesc ? String(cellDesc.v).trim() : '';
-    if (!itemCode || itemCode.toUpperCase() === 'PN' || itemCode.toLowerCase().includes('total')) continue;
-
-    const weeks: ImportWeekData[] = [];
-    let rowTotal = 0;
-    for (const wc of weekColumns) {
-      const qtyCell = ws[XLSX.utils.encode_cell({ r, c: wc.col })];
-      const qty = qtyCell && typeof qtyCell.v === 'number' ? qtyCell.v : 0;
-      if (qty > 0) {
-        weeks.push({ weekNumber: wc.weekNumber, weekStartDate: wc.weekStartDate, quantity: Math.round(qty) });
-        rowTotal += qty;
-      }
-    }
-    if (weeks.length === 0) continue;
-    idCounter++;
-    rows.push({ id: `r-${idCounter}`, itemCode, description, weeks, total: Math.round(rowTotal) });
-  }
-  return { rows, year };
-}
-
 // ─── Main Component ──────────────────────────────────────────────────────────
 const WEEKS_PER_PAGE = 13; // Show 13 weeks at a time (half of 26)
 
@@ -150,7 +44,6 @@ export function WeeklyDemand() {
   const [showImport, setShowImport] = useState(false);
   const [showForm, setShowForm] = useState(false);
   const [importRows, setImportRows] = useState<ImportRow[]>([]);
-  const [importYear, setImportYear] = useState(currentYear);
   const [importSearch, setImportSearch] = useState('');
   // Periode upload = keranjang data. WAJIB dipilih sebelum upload/isi manual.
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
@@ -175,6 +68,7 @@ export function WeeklyDemand() {
   const { data: periodsRes, isLoading: periodsLoading } = usePeriods();
   const periods = periodsRes?.data ?? [];
   const selectedPeriod = periods.find((p) => p.id === selectedPeriodId) ?? null;
+  const targetPeriod = periods.find((p) => p.id === targetPeriodId) ?? null;
   const createPeriod = useCreatePeriod();
 
   const handleCreatePeriod = async () => {
@@ -215,8 +109,7 @@ export function WeeklyDemand() {
     }
   };
 
-  // Manual add form state — uses an actual start date so the entry lines up
-  // with the dynamic W1-W26 view (relative to today).
+  // Manual add form state — aligned to the selected period's first uploaded week.
   const [formData, setFormData] = useState({
     itemId: '',
     startDate: getNextSaturdayISO(),
@@ -291,27 +184,20 @@ export function WeeklyDemand() {
 
   const ROWS_PER_PAGE = 50;
 
-  // Kalender kolom minggu dari backend (dibangun dari DATA import, bukan hari ini).
-  // Kalau backend belum mengirimnya (versi lama), turunkan dari data yang ada.
-  const weekCalendar = useMemo(() => summaryData?.weeks ?? [], [summaryData]);
+  const calendarWeeks = summaryData?.weeks ?? [];
 
-  // All week numbers present in the period
+  // Prefer the complete uploaded calendar so all-zero weeks remain visible.
   const allWeeks = useMemo(() => {
-    if (weekCalendar.length > 0) return weekCalendar.map((w) => w.weekNumber);
+    if (calendarWeeks.length > 0) return calendarWeeks.map((week) => week.weekNumber);
     const wSet = new Set<number>();
     allData.forEach((row) => Object.keys(row.weeks).forEach((w) => wSet.add(Number(w))));
     return Array.from(wSet).sort((a, b) => a - b);
-  }, [weekCalendar, allData]);
+  }, [allData, calendarWeeks]);
 
-  // Map relative week number -> weekStartDate. Diutamakan kalender backend,
-  // supaya minggu tanpa demand pun tetap punya label tanggal yang benar.
-  // Used to render the small date label under each W column header.
+  // Map W1-W26 to their dates from the uploaded period, including zero-demand weeks.
   const weekStartByNumber = useMemo(() => {
     const map: Record<number, string> = {};
-    for (const w of weekCalendar) {
-      if (w.weekStartDate) map[w.weekNumber] = w.weekStartDate;
-    }
-    if (Object.keys(map).length > 0) return map;
+    for (const week of calendarWeeks) map[week.weekNumber] = week.weekStartDate;
     for (const row of allData) {
       for (const [w, info] of Object.entries(row.weeks)) {
         const wn = Number(w);
@@ -319,16 +205,7 @@ export function WeeklyDemand() {
       }
     }
     return map;
-  }, [weekCalendar, allData]);
-
-  // Tanggal W1 (minggu pertama file import) + label periode untuk header.
-  const firstWeekStart = allWeeks.length > 0 ? weekStartByNumber[allWeeks[0]] : null;
-  const lastWeekStart = allWeeks.length > 0 ? weekStartByNumber[allWeeks[allWeeks.length - 1]] : null;
-  const firstWeekLabel = formatFullDate(firstWeekStart);
-  const lastWeekLabel = formatFullDate(lastWeekStart);
-  const periodRangeText = firstWeekLabel
-    ? `26 minggu dari ${firstWeekLabel}${lastWeekLabel ? ` s/d ${lastWeekLabel}` : ''}`
-    : '26 minggu';
+  }, [allData, calendarWeeks]);
 
   // List of available weeks for the dropdown select in the form
   const availableWeeks = useMemo(() => {
@@ -338,7 +215,7 @@ export function WeeklyDemand() {
         let dateLabel = '';
         if (startStr) {
           const localDateStr = startStr.split('T')[0];
-          const d = new Date(localDateStr + 'T00:00:00');
+          const d = localDateFromISO(localDateStr);
           if (!isNaN(d.getTime())) {
             dateLabel = d.toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' });
           }
@@ -400,6 +277,19 @@ export function WeeklyDemand() {
   );
   const totalPages = useMemo(() => Math.ceil(allWeeks.length / WEEKS_PER_PAGE), [allWeeks]);
 
+  const periodRangeLabel = useMemo(() => {
+    if (calendarWeeks.length === 0) return '';
+    // Rentang ditampilkan dari tanggal minggu pertama sampai tanggal minggu
+    // terakhir pada data (sesuai label kolom W1..W26).
+    const firstDate = localDateFromISO(calendarWeeks[0].weekStartDate);
+    const lastDate = localDateFromISO(calendarWeeks[calendarWeeks.length - 1].weekStartDate);
+    const options: Intl.DateTimeFormatOptions = { day: 'numeric', month: 'short', year: 'numeric' };
+    return `${firstDate.toLocaleDateString('id-ID', options)} – ${lastDate.toLocaleDateString('id-ID', options)}`;
+  }, [calendarWeeks]);
+  const periodTitle = summaryData?.periodStart
+    ? localDateFromISO(summaryData.periodStart).toLocaleDateString('id-ID', { month: 'long', year: 'numeric' })
+    : selectedPeriod?.label ?? 'Periode';
+
   const filteredData = useMemo(() => {
     if (!search) return allData;
     const q = search.toLowerCase();
@@ -431,9 +321,10 @@ export function WeeklyDemand() {
     reader.onload = (evt) => {
       try {
         const wb = XLSX.read(evt.target?.result, { type: 'binary' });
-        let parsed: { rows: ImportRow[]; year: number } = { rows: [], year: currentYear };
+        const fallbackYear = Number(targetPeriod?.uploadMonth.slice(0, 4)) || currentYear;
+        let parsed: { rows: ImportRow[]; startDate: string } = { rows: [], startDate: '' };
         for (const sheetName of wb.SheetNames) {
-          parsed = parse26WeekExcel(wb.Sheets[sheetName]);
+          parsed = parse26WeekExcel(wb.Sheets[sheetName], fallbackYear);
           if (parsed.rows.length > 0) break;
         }
         if (parsed.rows.length === 0) {
@@ -441,9 +332,8 @@ export function WeeklyDemand() {
           return;
         }
         setImportRows(parsed.rows);
-        setImportYear(parsed.year || currentYear);
       } catch {
-        alert('Gagal membaca file Excel.');
+        alert('Gagal membaca file Excel. Pastikan tanggal setiap kolom minggu terbaca.');
       }
     };
     reader.readAsBinaryString(file);
@@ -456,7 +346,7 @@ export function WeeklyDemand() {
     for (const row of importRows) {
       for (const w of row.weeks) {
         records.push({
-          year: importYear,
+          year: Number(w.weekStartDate.slice(0, 4)),
           weekNumber: w.weekNumber,
           weekStartDate: w.weekStartDate || undefined,
           weekEndDate: w.weekStartDate
@@ -473,7 +363,13 @@ export function WeeklyDemand() {
       return;
     }
     try {
-      const res: any = await bulkUpsert.mutateAsync({ records, saveMode, periodId: targetPeriodId, moduleType });
+      const res: any = await bulkUpsert.mutateAsync({
+        records,
+        saveMode,
+        replacePeriod: saveMode === 'overwrite',
+        periodId: targetPeriodId,
+        moduleType,
+      });
       setShowImport(false);
       setImportRows([]);
       alert(`Berhasil import ${res?.count ?? records.length} data ke modul ${MODULE_LABELS[moduleType]}!`);
@@ -492,7 +388,15 @@ export function WeeklyDemand() {
     const parts = new Set(importRows.map((r) => r.itemCode));
     const total = importRows.reduce((a, r) => a + r.total, 0);
     const weeks = new Set(importRows.flatMap((r) => r.weeks.map((w) => w.weekNumber)));
-    return { parts: parts.size, total, weeks: weeks.size };
+    const firstWeek = importRows[0]?.weeks[0];
+    const lastWeek = importRows[0]?.weeks[importRows[0].weeks.length - 1];
+    return {
+      parts: parts.size,
+      total,
+      weeks: weeks.size,
+      startDate: firstWeek?.weekStartDate ?? '',
+      endDate: lastWeek?.weekStartDate ?? '',
+    };
   }, [importRows]);
 
   const handleManualSave = async (saveMode: 'overwrite' | 'add') => {
@@ -550,16 +454,12 @@ export function WeeklyDemand() {
           <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
             <CalendarRange size={24} /> 26-Week Demand Plan
           </h2>
-          <p className="text-muted-foreground text-sm">
-            {firstWeekLabel
-              ? `Rencana kebutuhan produksi 26 minggu dari ${firstWeekLabel}${lastWeekLabel ? ` s/d ${lastWeekLabel}` : ''} (mengikuti periode data yang diupload).`
-              : 'Rencana kebutuhan produksi selama 26 minggu.'}
-          </p>
+          <p className="text-muted-foreground text-sm">Rencana kebutuhan produksi sesuai periode data yang diunggah.</p>
         </div>
         <div className="flex items-center gap-3">
           <div className="hidden sm:flex items-center gap-2 text-xs text-muted-foreground border rounded-md px-3 h-9">
             <Calendar size={14} />
-            <span>{firstWeekLabel ? periodRangeText : '26 minggu'}</span>
+            <span>{periodRangeLabel || 'Rentang mengikuti tanggal data yang diunggah'}</span>
           </div>
           {isAdmin && (
             <button onClick={() => setShowImport(true)} className="bg-secondary border hover:bg-secondary/80 px-4 py-2 rounded-md font-medium text-sm flex items-center gap-2 transition-colors">
@@ -773,12 +673,7 @@ export function WeeklyDemand() {
             <ArrowLeft className="w-4 h-4" />
           </button>
           <h3 className="font-semibold text-lg">
-            {selectedPeriod?.label ?? 'Periode'} (26-Week Demand Plan)
-            {firstWeekLabel && (
-              <span className="ml-2 text-sm font-normal text-muted-foreground">
-                26 minggu dari {firstWeekLabel}
-              </span>
-            )}
+            {periodTitle} (26-Week Demand Plan)
           </h3>
         </div>
       <div className="bg-card text-card-foreground border rounded-lg shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
@@ -840,15 +735,12 @@ export function WeeklyDemand() {
                 {visibleWeeks.map((w) => {
                   const start = weekStartByNumber[w];
                   const startLabel = start
-                    ? new Date(start).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
+                    ? localDateFromISO(start).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
                     : '';
-                  // Minggu yang sudah lewat tetap tampil — hanya diberi penanda.
-                  const past = isWeekPast(start);
                   return (
-                    <th key={w} className={`px-3 py-1 text-center min-w-[80px] ${past ? 'bg-muted/40' : ''}`}>
+                    <th key={w} className="px-3 py-1 text-center min-w-[80px]">
                       <div className="font-bold">W{w}</div>
                       {startLabel && <div className="text-[10px] font-normal normal-case text-muted-foreground/80">{startLabel}</div>}
-                      {past && <div className="text-[9px] font-medium normal-case text-amber-600">Lewat</div>}
                     </th>
                   );
                 })}
@@ -897,10 +789,10 @@ export function WeeklyDemand() {
                       const qty = weekData?.quantity;
                       return (
                         <td key={w} className="px-3 py-3 text-center relative group min-w-[80px]">
-                          {qty ? (
+                          {weekData ? (
                             <div className="flex flex-col items-center justify-center w-full h-full">
                               <span className="font-medium text-blue-600 dark:text-blue-400">
-                                {qty.toLocaleString()}
+                                {weekData.quantity.toLocaleString()}
                               </span>
                               {isAdmin && (
                                 <div className="absolute inset-0 flex items-center justify-center gap-1 opacity-0 group-hover:opacity-100 bg-card/90 backdrop-blur-[1px] transition-all">
@@ -937,7 +829,7 @@ export function WeeklyDemand() {
                       );
                     })}
                     <td className="px-4 py-3 text-right font-bold text-primary">
-                      {visibleWeeks.reduce((sum, w) => sum + (row.weeks?.[w]?.quantity || 0), 0).toLocaleString()}
+                      {row.total.toLocaleString()}
                     </td>
                   </tr>
                 ))
@@ -950,9 +842,6 @@ export function WeeklyDemand() {
           <div className="px-4 py-3 border-t bg-muted/10 flex items-center justify-between text-xs text-muted-foreground">
             <span>
               Menampilkan {filteredData.length} item · {allWeeks.length} minggu
-              <span className="ml-1 normal-case">
-                (seluruh periode data import; minggu yang sudah lewat ditandai <span className="font-medium text-amber-600">Lewat</span>)
-              </span>
             </span>
             {totalRowPages > 1 && (
               <div className="flex items-center gap-2">
@@ -1039,15 +928,14 @@ export function WeeklyDemand() {
                     </div>
                   </div>
 
-                  {/* Tahun import */}
+                  {/* Periode tanggal sumber */}
                   <div className="flex items-center gap-3">
-                    <label className="text-sm font-medium whitespace-nowrap">Tahun Data:</label>
-                    <input
-                      type="number"
-                      className="h-9 w-28 px-3 border rounded-md bg-background text-sm"
-                      value={importYear}
-                      onChange={(e) => setImportYear(Number(e.target.value))}
-                    />
+                    <span className="text-sm font-medium whitespace-nowrap">Rentang Data:</span>
+                    <span className="text-sm text-muted-foreground whitespace-nowrap">
+                      {importSummary.startDate && importSummary.endDate
+                        ? `${localDateFromISO(importSummary.startDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })} – ${localDateFromISO(importSummary.endDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short', year: 'numeric' })}`
+                        : '—'}
+                    </span>
                     <div className="flex-1 relative">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={15} />
                       <input
@@ -1089,17 +977,18 @@ export function WeeklyDemand() {
                                 </div>
                                 <div className="text-[10px] space-y-0.5 max-w-md">
                                   {row.weeks.map((week, idx) => {
-                                    const endDate = week.weekStartDate 
-                                      ? new Date(week.weekStartDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
+                                    const endDate = week.weekStartDate
+                                      ? localDateFromISO(week.weekStartDate).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
                                       : '';
-                                    const startDate = week.weekStartDate
-                                      ? new Date(new Date(week.weekStartDate).getTime() - 6 * 86400000).toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })
-                                      : '';
+                                    const startDate = week.weekStartDate ? localDateFromISO(week.weekStartDate) : null;
+                                    startDate?.setDate(startDate.getDate() - 6);
                                     return (
                                       <div key={idx} className="flex items-center gap-1">
                                         <span className="font-medium text-blue-600">W{week.weekNumber}</span>
                                         {startDate && endDate && (
-                                          <span className="text-muted-foreground/60">({startDate} - {endDate})</span>
+                                          <span className="text-muted-foreground/60">
+                                            ({startDate.toLocaleDateString('id-ID', { day: 'numeric', month: 'short' })} - {endDate})
+                                          </span>
                                         )}
                                         <span className="text-foreground font-medium">: {week.quantity.toLocaleString()}</span>
                                       </div>
@@ -1133,7 +1022,11 @@ export function WeeklyDemand() {
             </div>
 
             {/* Modal Footer */}
-            <div className="p-5 border-t flex justify-end gap-3 bg-muted/10">
+            <div className="p-5 border-t flex flex-wrap justify-between items-center gap-3 bg-muted/10">
+              <p className="text-xs text-muted-foreground">
+                Save Overwrite mengganti seluruh data MRP pada periode dan modul terpilih.
+              </p>
+              <div className="flex justify-end gap-3">
               <button
                 onClick={() => { setShowImport(false); setImportRows([]); }}
                 className="h-10 border px-6 rounded-md font-medium hover:bg-muted text-sm transition-colors"
@@ -1156,6 +1049,7 @@ export function WeeklyDemand() {
                 <Save size={16} />
                 {bulkUpsert.isPending ? 'Menyimpan...' : 'Save Overwrite'}
               </button>
+              </div>
             </div>
           </div>
         </div>

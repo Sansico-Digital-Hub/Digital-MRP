@@ -4,6 +4,7 @@ import { config } from '../config';
 import { authenticate } from '../middleware/auth';
 import { resolveUploadPeriod, recordPeriodChange, touchPeriod } from '../lib/periodScope';
 import { normalizeHeaderName, matchesMtl } from '../lib/excelRef';
+import { canonicalSupplier } from '../lib/supplierAlias';
 import * as xlsx from 'xlsx';
 
 export default async function stockRawMaterialRoutes(server: FastifyInstance) {
@@ -58,12 +59,15 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
     const RIM_UNIT_LIST = ['rim', 'ream'];
 
     for (const s of stocks) {
-      const key = `${s.itemDesc}||${s.supplier || ''}`;
+      // Supplier dinormalisasi (lihat `supplierAlias.ts`): "MEGA SURYA ERATAMA"
+      // dan "MEGA" dianggap satu supplier, jadi lotnya ikut digabung.
+      const supplier = canonicalSupplier(s.supplier);
+      const key = `${s.itemDesc}||${supplier}`;
       const agg =
         map.get(key) ||
         {
           itemDesc: s.itemDesc,
-          supplier: s.supplier || '',
+          supplier,
           kg: 0,
           sheet: 0,
           rim: 0,
@@ -137,17 +141,16 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
     // `supplier` kosong harus cocok dengan baris NULL **maupun** string kosong,
     // karena data nyata memakai keduanya. Kalau parameter tidak dikirim sama
     // sekali, tampilkan semua lot untuk item tersebut.
-    const supplierFilter =
-      supplier === undefined
-        ? {}
-        : supplier === ''
-          ? { OR: [{ supplier: null }, { supplier: '' }] }
-          : { supplier };
-
-    const data = await prisma.stockRawMaterial.findMany({
-      where: { periodId, itemDesc, ...supplierFilter },
-      orderBy: { date: 'desc' },
-    });
+    //
+    // PENTING: supplier di sini datang dari endpoint `/summary` yang sudah
+    // memakai NAMA KANONIK, sedangkan kolom di DB masih nama asli. Jadi lot
+    // diambil per itemDesc lalu disaring di JS dengan pembanding kanonik.
+    const data = (
+      await prisma.stockRawMaterial.findMany({
+        where: { periodId, itemDesc },
+        orderBy: { date: 'desc' },
+      })
+    ).filter((row) => supplier === undefined || canonicalSupplier(row.supplier) === supplier);
 
     return reply.send({
       data,

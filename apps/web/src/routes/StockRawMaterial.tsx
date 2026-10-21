@@ -1,10 +1,11 @@
 import { useEffect, useState, useRef, useMemo, Fragment } from 'react';
 import { useStockRawMaterial, useUploadStockRawMaterial, useAddManualStockRawMaterial, useUpdateStockRawMaterial, useDeleteStockRawMaterial, useBulkDeleteStockRawMaterial, useImportStockRawMaterial, type StockRawMaterialData, type StockRawMaterialUploadSummary } from '../hooks/useStockRawMaterial';
 import { FileSpreadsheet, Plus, Upload, Loader2, Search, Pencil, Trash2, X, Check, Save, Folder, ArrowLeft, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Lock, CalendarPlus } from 'lucide-react';
-import { usePeriods, useCreatePeriod, monthLabel } from '../hooks/usePeriods';
+import { usePeriods, useCreatePeriod, monthLabel, periodDisplayLabel } from '../hooks/usePeriods';
 import { PeriodSelect } from '../components/PeriodSelect';
-import { RefBSummary, RefBValue, matchesMtl, REF_B_MTL_MESSAGE } from '../components/RefB';
+import { RefBSummary, RefBValue, matchesMtl } from '../components/RefB';
 import { format } from 'date-fns';
+import { useTranslation, translate, type Lang } from '../i18n';
 
 // Satuan yang benar-benar dipakai data.
 // CATATAN PENTING: satuan terbanyak di data adalah "sht" (199 baris), BUKAN
@@ -15,13 +16,14 @@ const RIM_UNITS = ['rim', 'ream'];
 const SHEETS_PER_RIM = 500; // sama dengan config.materialCalc.sheetsPerRim di API
 
 const normalizeUnit = (unit: string | null | undefined) => String(unit || '').trim().toLowerCase();
-const unitLabel = (unit: string | null | undefined) => {
+const unitLabel = (unit: string | null | undefined, lang: Lang = 'id') => {
   const value = String(unit || '').trim();
-  return value === '' ? '(tanpa satuan)' : value;
+  return value === '' ? translate(lang, 'stockRawMaterial.noUnit') : value;
 };
 const isKnownUnit = (unit: string) => SHEET_UNITS.includes(unit) || RIM_UNITS.includes(unit) || unit === 'kg';
 
 export function StockRawMaterial() {
+  const { t, lang, locale, dateLocale } = useTranslation();
   // Periode upload = keranjang data. WAJIB dipilih sebelum upload/isi manual.
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
   // Periode tujuan untuk Import / Add Manual. Ikut periode yang sedang dibuka,
@@ -45,7 +47,7 @@ export function StockRawMaterial() {
       setNewPeriodMonth('');
       setSelectedPeriodId(res.data.id);
     } catch (error: any) {
-      alert(error.message || 'Gagal membuat periode.');
+      alert(error.message || t('components.periodCreateFailed'));
     }
   };
   const uploadMutation = useUploadStockRawMaterial();
@@ -104,13 +106,13 @@ export function StockRawMaterial() {
           setPreviewData(res.data);
         } else {
           setPreviewData([]);
-          alert(res.message || 'No valid data found in file.');
+          alert(res.message || t('stockRawMaterial.noValidData'));
         }
         if (fileInputRef.current) fileInputRef.current.value = '';
       },
       onError: (error: any) => {
         setUploadSummary(null);
-        alert(`Failed to upload file: ${error.message}`);
+        alert(t('stockRawMaterial.uploadFailed', { error: error.message }));
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
     });
@@ -120,31 +122,35 @@ export function StockRawMaterial() {
     if (previewData.length === 0) return;
     
     if (!targetPeriodId) {
-      alert('Pilih periode dulu sebelum menyimpan data.');
+      alert(t('stockRawMaterial.selectPeriodBeforeSave'));
       return;
     }
 
-    let confirmMsg = `Tambahkan ${previewData.length} baris ke periode "${targetPeriod?.label}"?`;
+    let confirmMsg = t('stockRawMaterial.confirmAdd', {
+      count: previewData.length,
+      period: targetPeriod?.label ?? '',
+    });
     if (mode === 'overwrite') {
       const existing = targetPeriod?.counts.STOCK_RM ?? 0;
-      confirmMsg =
-        `PERHATIAN: seluruh data Stock Raw Material di periode "${targetPeriod?.label}" (${existing} baris) ` +
-        `akan DIGANTI dengan ${previewData.length} baris dari file ini.\n\n` +
-        'Periode lain tidak terpengaruh. Lanjutkan?';
+      confirmMsg = t('stockRawMaterial.confirmOverwrite', {
+        period: targetPeriod?.label ?? '',
+        existing,
+        count: previewData.length,
+      });
     }
 
     if (!window.confirm(confirmMsg)) return;
 
     importMutation.mutate({ data: previewData, mode, periodId: targetPeriodId }, {
       onSuccess: () => {
-        alert('Data imported successfully!');
+        alert(t('stockRawMaterial.importSuccess'));
         setPreviewData([]);
         setUploadSummary(null);
         setPreviewSearchTerm('');
         setPreviewEditingIndex(null);
       },
       onError: (error: any) => {
-        alert(`Failed to import data: ${error.message}`);
+        alert(t('stockRawMaterial.importFailed', { error: error.message }));
       }
     });
   };
@@ -162,11 +168,11 @@ export function StockRawMaterial() {
 
   const handlePreviewSaveEdit = (index: number) => {
     if (!previewEditForm.itemDesc || !previewEditForm.qty || !previewEditForm.unit) {
-      alert('Please fill all required fields');
+      alert(t('stockRawMaterial.fillRequiredFields'));
       return;
     }
     if (!matchesMtl(previewEditForm.refB)) {
-      alert(REF_B_MTL_MESSAGE);
+      alert(t('components.refBMtlMessage'));
       return;
     }
     const updatedData = [...previewData];
@@ -183,7 +189,7 @@ export function StockRawMaterial() {
   };
 
   const handlePreviewDelete = (index: number) => {
-    if (window.confirm('Are you sure you want to remove this record from the preview?')) {
+    if (window.confirm(t('stockRawMaterial.confirmRemovePreview'))) {
       const updatedData = [...previewData];
       updatedData.splice(index, 1);
       setPreviewData(updatedData);
@@ -194,17 +200,17 @@ export function StockRawMaterial() {
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualForm.itemDesc || !manualForm.date || !manualForm.qty || !manualForm.unit) {
-      alert('Please fill all required fields');
+      alert(t('stockRawMaterial.fillRequiredFields'));
       return;
     }
 
     if (!matchesMtl(manualForm.refB)) {
-      alert(REF_B_MTL_MESSAGE);
+      alert(t('components.refBMtlMessage'));
       return;
     }
 
     if (!targetPeriodId) {
-      alert('Pilih periode dulu sebelum menambah data manual.');
+      alert(t('stockRawMaterial.selectPeriodBeforeManual'));
       return;
     }
 
@@ -229,7 +235,7 @@ export function StockRawMaterial() {
         setIsManualOpen(false);
       },
       onError: (error: any) => {
-        alert(`Failed to add record: ${error.message}`);
+        alert(t('stockRawMaterial.addFailed', { error: error.message }));
       }
     });
   };
@@ -248,12 +254,12 @@ export function StockRawMaterial() {
 
   const handleSaveEdit = (id: string) => {
     if (!editForm.itemDesc || !editForm.date || !editForm.qty || !editForm.unit) {
-      alert('Please fill all required fields');
+      alert(t('stockRawMaterial.fillRequiredFields'));
       return;
     }
 
     if (!matchesMtl(editForm.refB)) {
-      alert(REF_B_MTL_MESSAGE);
+      alert(t('components.refBMtlMessage'));
       return;
     }
 
@@ -269,14 +275,14 @@ export function StockRawMaterial() {
       }
     }, {
       onSuccess: () => setEditingId(null),
-      onError: (error: any) => alert(`Failed to update record: ${error.message}`)
+      onError: (error: any) => alert(t('stockRawMaterial.updateFailed', { error: error.message }))
     });
   };
 
   const handleDelete = (id: string) => {
-    if (window.confirm('Are you sure you want to delete this record?')) {
+    if (window.confirm(t('stockRawMaterial.confirmDelete'))) {
       deleteMutation.mutate(id, {
-        onError: (error: any) => alert(`Failed to delete record: ${error.message}`)
+        onError: (error: any) => alert(t('stockRawMaterial.deleteFailed', { error: error.message }))
       });
     }
   };
@@ -293,10 +299,10 @@ export function StockRawMaterial() {
 
   const handleBulkDelete = () => {
     if (selectedIds.length === 0) return;
-    if (window.confirm(`Are you sure you want to delete ${selectedIds.length} records?`)) {
+    if (window.confirm(t('stockRawMaterial.confirmBulkDelete', { count: selectedIds.length }))) {
       bulkDeleteMutation.mutate(selectedIds, {
         onSuccess: () => setSelectedIds([]),
-        onError: (error: any) => alert(`Failed to delete records: ${error.message}`)
+        onError: (error: any) => alert(t('stockRawMaterial.bulkDeleteFailed', { error: error.message }))
       });
     }
   };
@@ -349,7 +355,7 @@ export function StockRawMaterial() {
       if (ref && !groups[groupKey].refBs.includes(ref)) groups[groupKey].refBs.push(ref);
 
       // Akumulasi per satuan (tidak dicampur).
-      const label = unitLabel(record.unit);
+      const label = unitLabel(record.unit, lang);
       const existing = groups[groupKey].totals.find((t) => t.unit.toLowerCase() === label.toLowerCase());
       if (existing) {
         existing.qty += record.qty;
@@ -374,7 +380,7 @@ export function StockRawMaterial() {
     });
 
     return Object.values(groups).sort((a, b) => a.itemDesc.localeCompare(b.itemDesc));
-  }, [filteredRecords]);
+  }, [filteredRecords, lang]);
 
   const toggleExpand = (itemDesc: string) => {
     setExpandedItemDescs(prev => {
@@ -417,9 +423,9 @@ export function StockRawMaterial() {
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Stock Raw Material</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{t('stockRawMaterial.title')}</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Manage stock raw material data. Upload from Excel or add manually.
+            {t('stockRawMaterial.subtitle')}
           </p>
         </div>
         
@@ -431,7 +437,7 @@ export function StockRawMaterial() {
             className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground hover:bg-secondary/80 rounded-md font-medium text-sm transition-colors"
           >
             {uploadMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-            Import Excel
+            {t('stockRawMaterial.importExcel')}
           </button>
           
           <button
@@ -440,7 +446,7 @@ export function StockRawMaterial() {
             className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md font-medium text-sm transition-colors"
           >
             <Plus className="w-4 h-4" />
-            Add Manual
+            {t('stockRawMaterial.addManual')}
           </button>
         </div>
       </div>
@@ -450,25 +456,25 @@ export function StockRawMaterial() {
           <div className="p-5 border-b bg-primary/5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <h2 className="text-lg font-bold text-primary flex items-center gap-2">
-                <FileSpreadsheet className="w-5 h-5" /> Data Preview
+                <FileSpreadsheet className="w-5 h-5" /> {t('stockRawMaterial.dataPreview')}
               </h2>
               <p className="text-sm text-muted-foreground mt-1">
-                You are about to import <strong>{previewData.length}</strong> records. Please review the data below and choose how to save.
+                {t('stockRawMaterial.previewIntroBefore')} <strong>{previewData.length}</strong> {t('stockRawMaterial.previewIntroAfter')}
               </p>
             </div>
             <div className="flex flex-wrap gap-2 items-center">
               <div className="relative w-full sm:w-64 mr-2">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground w-4 h-4" />
-                <input type="text" placeholder="Search preview..." className="w-full pl-9 pr-4 py-1.5 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary" value={previewSearchTerm} onChange={(e) => setPreviewSearchTerm(e.target.value)} />
+                <input type="text" placeholder={t('stockRawMaterial.searchPreview')} className="w-full pl-9 pr-4 py-1.5 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary" value={previewSearchTerm} onChange={(e) => setPreviewSearchTerm(e.target.value)} />
               </div>
               <button onClick={() => handleSaveImport('add')} disabled={importMutation.isPending || !targetPeriodId} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-md font-medium text-sm disabled:opacity-50">
-                {importMutation.isPending && importMutation.variables?.mode === 'add' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save (Add)
+                {importMutation.isPending && importMutation.variables?.mode === 'add' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} {t('stockRawMaterial.saveAdd')}
               </button>
               <button onClick={() => handleSaveImport('overwrite')} disabled={importMutation.isPending || !targetPeriodId} className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-md font-medium text-sm disabled:opacity-50">
-                {importMutation.isPending && importMutation.variables?.mode === 'overwrite' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save (Overwrite)
+                {importMutation.isPending && importMutation.variables?.mode === 'overwrite' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} {t('stockRawMaterial.saveOverwrite')}
               </button>
               <button onClick={() => setPreviewData([])} disabled={importMutation.isPending} className="flex items-center gap-2 px-4 py-2 bg-muted text-muted-foreground hover:bg-muted/80 rounded-md font-medium text-sm">
-                <X className="w-4 h-4" /> Cancel
+                <X className="w-4 h-4" /> {t('common.cancel')}
               </button>
             </div>
           </div>
@@ -478,22 +484,22 @@ export function StockRawMaterial() {
           {uploadSummary && (
             <div className="mx-5 mt-4 border border-emerald-200 dark:border-emerald-500/30 bg-emerald-50/60 dark:bg-emerald-500/5 rounded-lg px-4 py-3">
               <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-300 mb-1">
-                Ringkasan file Stock Raw Material
+                {t('stockRawMaterial.summaryTitle')}
               </p>
               <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-foreground">
                 <span>
-                  Total baris di file: <strong>{uploadSummary.totalRows}</strong>
+                  {t('stockRawMaterial.summaryTotalRows')} <strong>{uploadSummary.totalRows}</strong>
                 </span>
                 <span className="text-emerald-700 dark:text-emerald-400">
-                  Masuk (mengandung "MTL"): <strong>{uploadSummary.included}</strong>
+                  {t('stockRawMaterial.summaryIncluded')} <strong>{uploadSummary.included}</strong>
                 </span>
                 <span className="text-amber-700 dark:text-amber-400">
-                  Dilewati (tidak mengandung "MTL"): <strong>{uploadSummary.skippedNoMtl}</strong>
+                  {t('stockRawMaterial.summarySkipped')} <strong>{uploadSummary.skippedNoMtl}</strong>
                 </span>
               </div>
               <p className="text-[11px] text-muted-foreground mt-1">
-                Hanya baris dengan kolom <span className="font-semibold">Ref_B_PO</span> mengandung
-                "MTL" yang bisa diimpor.
+                {t('stockRawMaterial.summaryHintBefore')} <span className="font-semibold">Ref_B_PO</span>{' '}
+                {t('stockRawMaterial.summaryHintAfter')}
               </p>
             </div>
           )}
@@ -501,17 +507,17 @@ export function StockRawMaterial() {
             <table className="w-full text-sm text-left">
               <thead className="text-xs text-muted-foreground uppercase bg-secondary/50 sticky top-0 z-10 shadow-sm">
                 <tr>
-                  <th className="px-6 py-4 font-semibold w-1/3">Item Desc</th>
-                    <th className="px-6 py-4 font-semibold">Ref-B</th>
-                    <th className="px-6 py-4 font-semibold">Supplier</th>
-                    <th className="px-6 py-4 font-semibold text-right">Qty</th>
-                    <th className="px-6 py-4 font-semibold text-center">Unit</th>
-                    <th className="px-6 py-4 font-semibold text-right">Aksi</th>
+                  <th className="px-6 py-4 font-semibold w-1/3">{t('stockRawMaterial.itemDesc')}</th>
+                    <th className="px-6 py-4 font-semibold">{t('stockRawMaterial.refB')}</th>
+                    <th className="px-6 py-4 font-semibold">{t('stockRawMaterial.supplier')}</th>
+                    <th className="px-6 py-4 font-semibold text-right">{t('stockRawMaterial.qty')}</th>
+                    <th className="px-6 py-4 font-semibold text-center">{t('stockRawMaterial.unit')}</th>
+                    <th className="px-6 py-4 font-semibold text-right">{t('common.action')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
                   {filteredPreviewData.length === 0 ? (
-                     <tr><td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">No matching data found in preview.</td></tr>
+                     <tr><td colSpan={6} className="px-6 py-8 text-center text-muted-foreground">{t('stockRawMaterial.noPreviewResults')}</td></tr>
                 ) : filteredPreviewData.map((record) => {
                   const originalIndex = previewData.indexOf(record);
                   return (
@@ -519,7 +525,7 @@ export function StockRawMaterial() {
                       {previewEditingIndex === originalIndex ? (
                         <>
                           <td className="px-6 py-3"><input type="text" className="w-full h-8 px-2 border rounded text-sm" value={previewEditForm.itemDesc} onChange={(e) => setPreviewEditForm({ ...previewEditForm, itemDesc: e.target.value })} /></td>
-                          <td className="px-6 py-3"><input type="text" className="w-full h-8 px-2 border rounded text-sm font-mono" placeholder="Ref-B (mis. MTL/...)" value={previewEditForm.refB} onChange={(e) => setPreviewEditForm({ ...previewEditForm, refB: e.target.value })} /></td>
+                          <td className="px-6 py-3"><input type="text" className="w-full h-8 px-2 border rounded text-sm font-mono" placeholder={t('stockRawMaterial.refBPlaceholder')} value={previewEditForm.refB} onChange={(e) => setPreviewEditForm({ ...previewEditForm, refB: e.target.value })} /></td>
                           <td className="px-6 py-3"><input type="text" className="w-full h-8 px-2 border rounded text-sm" value={previewEditForm.supplier} onChange={(e) => setPreviewEditForm({ ...previewEditForm, supplier: e.target.value })} /></td>
                           <td className="px-6 py-3"><input type="number" step="any" className="w-full h-8 px-2 border rounded text-sm text-right" value={previewEditForm.qty} onChange={(e) => setPreviewEditForm({ ...previewEditForm, qty: e.target.value })} /></td>
                           <td className="px-6 py-3">
@@ -562,7 +568,7 @@ export function StockRawMaterial() {
         <>
           {isManualOpen && (
             <div className="bg-card border rounded-lg p-5 shadow-sm animate-in slide-in-from-top-2">
-              <h2 className="text-sm font-semibold mb-4">Add Raw Material Manual</h2>
+              <h2 className="text-sm font-semibold mb-4">{t('stockRawMaterial.addManualTitle')}</h2>
               <form onSubmit={handleManualSubmit} className="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
                 <PeriodSelect
                   value={targetPeriodId}
@@ -570,34 +576,34 @@ export function StockRawMaterial() {
                   className="md:col-span-6"
                 />
                 <div className="space-y-1.5 md:col-span-2">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Item Desc</label>
-                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm" placeholder="Description" value={manualForm.itemDesc} onChange={(e) => setManualForm({ ...manualForm, itemDesc: e.target.value })} required />
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('stockRawMaterial.itemDesc')}</label>
+                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm" placeholder={t('common.description')} value={manualForm.itemDesc} onChange={(e) => setManualForm({ ...manualForm, itemDesc: e.target.value })} required />
                 </div>
                 <div className="space-y-1.5 md:col-span-1">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Supplier</label>
-                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm" placeholder="Supplier" value={manualForm.supplier} onChange={(e) => setManualForm({ ...manualForm, supplier: e.target.value })} />
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('stockRawMaterial.supplier')}</label>
+                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm" placeholder={t('stockRawMaterial.supplier')} value={manualForm.supplier} onChange={(e) => setManualForm({ ...manualForm, supplier: e.target.value })} />
                 </div>
                 <div className="space-y-1.5 md:col-span-1">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Date</label>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('common.date')}</label>
                   <input type="date" className="w-full h-10 px-3 border rounded-md text-sm" value={manualForm.date} onChange={(e) => setManualForm({ ...manualForm, date: e.target.value })} required />
                 </div>
                 <div className="space-y-1.5 md:col-span-1">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Qty</label>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('stockRawMaterial.qty')}</label>
                   <input type="number" step="any" className="w-full h-10 px-3 border rounded-md text-sm" placeholder="0" value={manualForm.qty} onChange={(e) => setManualForm({ ...manualForm, qty: e.target.value })} required />
                 </div>
                 <div className="space-y-1.5 md:col-span-1">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Unit</label>
-                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm" placeholder="Unit" value={manualForm.unit} onChange={(e) => setManualForm({ ...manualForm, unit: e.target.value })} required />
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('stockRawMaterial.unit')}</label>
+                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm" placeholder={t('stockRawMaterial.unit')} value={manualForm.unit} onChange={(e) => setManualForm({ ...manualForm, unit: e.target.value })} required />
                 </div>
                 <div className="space-y-1.5 md:col-span-2">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Ref-B <span className="text-destructive">*</span></label>
-                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm font-mono" placeholder="mis. MTL/JUL 26/RP11.000" value={manualForm.refB} onChange={(e) => setManualForm({ ...manualForm, refB: e.target.value })} required />
-                  <p className="text-[11px] text-muted-foreground">Wajib mengandung "MTL".</p>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('stockRawMaterial.refB')} <span className="text-destructive">*</span></label>
+                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm font-mono" placeholder={t('stockRawMaterial.refBExample')} value={manualForm.refB} onChange={(e) => setManualForm({ ...manualForm, refB: e.target.value })} required />
+                  <p className="text-[11px] text-muted-foreground">{t('stockRawMaterial.refBHint')}</p>
                 </div>
                 <div className="flex gap-2 md:col-span-6 justify-end mt-2">
-                  <button type="button" onClick={() => setIsManualOpen(false)} className="h-10 px-4 bg-muted text-muted-foreground rounded-md font-medium text-sm">Cancel</button>
+                  <button type="button" onClick={() => setIsManualOpen(false)} className="h-10 px-4 bg-muted text-muted-foreground rounded-md font-medium text-sm">{t('common.cancel')}</button>
                   <button type="submit" disabled={addManualMutation.isPending || !targetPeriodId} className="h-10 px-6 bg-primary text-primary-foreground rounded-md font-medium text-sm flex items-center justify-center gap-2 disabled:opacity-50">
-                    {addManualMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />} Save
+                    {addManualMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />} {t('common.save')}
                   </button>
                 </div>
               </form>
@@ -610,9 +616,9 @@ export function StockRawMaterial() {
               {periods.length === 0 && !periodsLoading && (
                 <div className="py-12 text-center text-muted-foreground border rounded-lg bg-card">
                   <FileSpreadsheet className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
-                  <p className="text-base font-semibold">Belum ada periode</p>
+                  <p className="text-base font-semibold">{t('stockRawMaterial.noPeriods')}</p>
                   <p className="text-sm mt-1">
-                    Buat periode dulu (mis. September 2026), lalu upload data Stock Raw Material ke periode itu.
+                    {t('stockRawMaterial.noPeriodsHint')}
                   </p>
                 </div>
               )}
@@ -628,11 +634,11 @@ export function StockRawMaterial() {
                     </div>
                     <div className="min-w-0">
                       <h3 className="font-semibold text-foreground flex items-center gap-1.5">
-                        <span className="truncate">{p.label}</span>
+                        <span className="truncate">{periodDisplayLabel(p, lang)}</span>
                         {p.isLocked && <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
                       </h3>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {p.counts.STOCK_RM} Lot Stok · {p.counts.MRP} baris MRP
+                        {t('stockRawMaterial.periodCounts', { lots: p.counts.STOCK_RM, mrp: p.counts.MRP })}
                       </p>
                     </div>
                   </div>
@@ -640,7 +646,7 @@ export function StockRawMaterial() {
 
                 <div className="p-5 border-2 border-dashed rounded-lg bg-card flex flex-col gap-3 justify-center">
                   <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                    <CalendarPlus className="w-4 h-4" /> Buat Periode Baru
+                    <CalendarPlus className="w-4 h-4" /> {t('stockRawMaterial.createNewPeriod')}
                   </div>
                   <input
                     type="month"
@@ -654,7 +660,7 @@ export function StockRawMaterial() {
                     className="w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center gap-2"
                   >
                     {createPeriod.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                    Buat {newPeriodMonth ? monthLabel(newPeriodMonth) : 'Periode'}
+                    {t('components.createPeriod', { label: newPeriodMonth ? monthLabel(newPeriodMonth, lang) : t('components.periodLabel') })}
                   </button>
                 </div>
               </div>
@@ -666,34 +672,34 @@ export function StockRawMaterial() {
                 <button 
                   onClick={() => setSelectedPeriodId(null)}
                   className="p-2 hover:bg-background rounded-md border text-muted-foreground hover:text-foreground transition-colors shrink-0"
-                  title="Kembali ke daftar periode"
+                  title={t('stockRawMaterial.backToPeriods')}
                 >
                   <ArrowLeft className="w-4 h-4" />
                 </button>
                 <div className="relative w-full sm:w-64">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground w-4 h-4" />
-                  <input type="text" placeholder={`Cari di ${selectedPeriod?.label ?? ''}...`} className="w-full pl-9 pr-4 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                  <input type="text" placeholder={t('stockRawMaterial.searchInPeriod', { period: selectedPeriod?.label ?? '' })} className="w-full pl-9 pr-4 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
                 </div>
                 <div className="flex items-center gap-1 bg-background border rounded-md p-0.5 text-xs text-muted-foreground">
-                  <button onClick={expandAll} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title="Buka Semua Detail">
-                    <ChevronsDown className="w-3.5 h-3.5" /> Buka
+                  <button onClick={expandAll} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title={t('stockRawMaterial.expandAllTitle')}>
+                    <ChevronsDown className="w-3.5 h-3.5" /> {t('stockRawMaterial.expand')}
                   </button>
                   <span className="text-muted-foreground/30">|</span>
-                  <button onClick={collapseAll} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title="Tutup Semua Detail">
-                    <ChevronsUp className="w-3.5 h-3.5" /> Tutup
+                  <button onClick={collapseAll} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title={t('stockRawMaterial.collapseAllTitle')}>
+                    <ChevronsUp className="w-3.5 h-3.5" /> {t('stockRawMaterial.collapse')}
                   </button>
                 </div>
               </div>
               <div className="flex items-center gap-3">
                 {selectedIds.length > 0 && (
                   <button onClick={handleBulkDelete} disabled={bulkDeleteMutation.isPending} className="flex items-center gap-2 px-3 py-1.5 bg-destructive text-destructive-foreground hover:bg-destructive/90 rounded-md font-medium text-sm animate-in fade-in">
-                    {bulkDeleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />} Delete ({selectedIds.length})
+                    {bulkDeleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />} {t('stockRawMaterial.deleteCount', { count: selectedIds.length })}
                   </button>
                 )}
                 <div className="text-sm font-medium text-muted-foreground bg-background px-3 py-1.5 border rounded-md flex items-center gap-2">
-                  <span>{groupedByItem.length} Items</span>
+                  <span>{t('stockRawMaterial.itemsCount', { count: groupedByItem.length })}</span>
                   <span className="text-muted-foreground/40">•</span>
-                  <span>{filteredRecords.length} Lots</span>
+                  <span>{t('stockRawMaterial.lotsCount', { count: filteredRecords.length })}</span>
                 </div>
               </div>
             </div>
@@ -705,13 +711,13 @@ export function StockRawMaterial() {
                     <th className="px-4 py-4 w-12 text-center">
                       <input type="checkbox" className="rounded border-gray-300 w-4 h-4" checked={filteredRecords.length > 0 && selectedIds.length === filteredRecords.length} onChange={handleSelectAll} />
                     </th>
-                    <th className="px-6 py-4 font-semibold">Item Desc</th>
-                    <th className="px-6 py-4 font-semibold">Ref-B</th>
-                    <th className="px-6 py-4 font-semibold">Supplier</th>
-                    <th className="px-6 py-4 font-semibold">Date</th>
-                    <th className="px-6 py-4 font-semibold text-right">Qty</th>
-                    <th className="px-6 py-4 font-semibold text-center">Unit</th>
-                    <th className="px-6 py-4 font-semibold text-right">Aksi</th>
+                    <th className="px-6 py-4 font-semibold">{t('stockRawMaterial.itemDesc')}</th>
+                    <th className="px-6 py-4 font-semibold">{t('stockRawMaterial.refB')}</th>
+                    <th className="px-6 py-4 font-semibold">{t('stockRawMaterial.supplier')}</th>
+                    <th className="px-6 py-4 font-semibold">{t('common.date')}</th>
+                    <th className="px-6 py-4 font-semibold text-right">{t('stockRawMaterial.qty')}</th>
+                    <th className="px-6 py-4 font-semibold text-center">{t('stockRawMaterial.unit')}</th>
+                    <th className="px-6 py-4 font-semibold text-right">{t('common.action')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -719,14 +725,14 @@ export function StockRawMaterial() {
                     <tr>
                       <td colSpan={8} className="px-6 py-12 text-center text-muted-foreground">
                         <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" />
-                        <p className="mt-2 text-sm font-medium">Memuat data...</p>
+                        <p className="mt-2 text-sm font-medium">{t('common.loading')}</p>
                       </td>
                     </tr>
                   ) : groupedByItem.length === 0 ? (
                     <tr>
                       <td colSpan={8} className="px-6 py-12 text-center text-muted-foreground">
                         <FileSpreadsheet className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
-                        <p className="text-base font-semibold">Tidak ada data Stock Raw Material</p>
+                        <p className="text-base font-semibold">{t('stockRawMaterial.emptyData')}</p>
                       </td>
                     </tr>
                   ) : (
@@ -756,7 +762,7 @@ export function StockRawMaterial() {
                                 <button
                                   onClick={() => toggleExpand(group.key)}
                                   className="p-1 hover:bg-muted/80 rounded transition-colors text-muted-foreground hover:text-foreground shrink-0"
-                                  title={isExpanded ? 'Tutup Detail' : 'Buka Detail'}
+                                  title={isExpanded ? t('stockRawMaterial.closeDetailTitle') : t('stockRawMaterial.openDetailTitle')}
                                 >
                                   {isExpanded ? (
                                     <ChevronDown className="w-4 h-4 text-primary" />
@@ -768,7 +774,7 @@ export function StockRawMaterial() {
                                   {group.itemDesc}
                                 </span>
                                 <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-secondary text-secondary-foreground">
-                                  {group.items.length} {group.items.length > 1 ? 'lots' : 'lot'}
+                                  {group.items.length} {group.items.length > 1 ? t('stockRawMaterial.lots') : t('stockRawMaterial.lot')}
                                 </span>
                               </div>
                             </td>
@@ -776,19 +782,19 @@ export function StockRawMaterial() {
                             <td className="px-6 py-3.5 text-muted-foreground text-xs">{group.suppliers || '-'}</td>
                             <td className="px-6 py-3.5 text-muted-foreground text-xs font-medium">
                               {group.items.length === 1
-                                ? format(new Date(group.items[0].date), 'dd MMM yyyy')
-                                : `${group.items.length} records`}
+                                ? format(new Date(group.items[0].date), 'dd MMM yyyy', { locale: dateLocale })
+                                : t('stockRawMaterial.recordsCount', { count: group.items.length })}
                             </td>
                             <td className="px-6 py-3.5 text-right font-extrabold text-foreground text-sm">
                               <div className="space-y-0.5">
-                                {group.totals.map((t) => {
-                                  const isRim = RIM_UNITS.includes(t.unit.toLowerCase());
+                                {group.totals.map((total) => {
+                                  const isRim = RIM_UNITS.includes(total.unit.toLowerCase());
                                   return (
-                                    <div key={t.unit}>
-                                      {t.qty.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 4 })}
+                                    <div key={total.unit}>
+                                      {total.qty.toLocaleString(locale, { minimumFractionDigits: 0, maximumFractionDigits: 4 })}
                                       {isRim && (
                                         <span className="block text-[10px] font-normal text-muted-foreground">
-                                          = {(t.qty * SHEETS_PER_RIM).toLocaleString('id-ID')} lbr
+                                          = {(total.qty * SHEETS_PER_RIM).toLocaleString(locale)} {t('unit.sheets')}
                                         </span>
                                       )}
                                     </div>
@@ -797,22 +803,22 @@ export function StockRawMaterial() {
                               </div>
                               {group.unknownUnits.length > 0 && (
                                 <div className="text-[10px] font-normal text-amber-600 mt-1">
-                                  ⚠️ satuan tidak dikenali: {group.unknownUnits.join(', ')}
+                                  {t('stockRawMaterial.unknownUnits', { units: group.unknownUnits.join(', ') })}
                                 </div>
                               )}
                             </td>
                             <td className="px-6 py-3.5 text-center">
                               <div className="flex flex-wrap gap-1 justify-center">
-                                {group.totals.map((t) => (
+                                {group.totals.map((total) => (
                                   <span
-                                    key={t.unit}
+                                    key={total.unit}
                                     className={`font-semibold px-2.5 py-1 rounded text-xs ${
-                                      isKnownUnit(t.unit.toLowerCase())
+                                      isKnownUnit(total.unit.toLowerCase())
                                         ? 'bg-primary/10 text-primary'
                                         : 'bg-amber-100 text-amber-700'
                                     }`}
                                   >
-                                    {t.unit}
+                                    {total.unit}
                                   </span>
                                 ))}
                               </div>
@@ -822,7 +828,7 @@ export function StockRawMaterial() {
                                 onClick={() => toggleExpand(group.key)}
                                 className="text-xs text-primary hover:text-primary/80 font-medium inline-flex items-center gap-1 p-1 hover:bg-primary/10 rounded transition-colors"
                               >
-                                {isExpanded ? 'Tutup' : 'Detail'}
+                                {isExpanded ? t('stockRawMaterial.collapse') : t('common.detail')}
                                 {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
                               </button>
                             </td>
@@ -857,7 +863,7 @@ export function StockRawMaterial() {
                                       <input
                                         type="text"
                                         className="w-full h-8 px-2 border rounded text-xs bg-background font-mono"
-                                        placeholder="Ref-B (mis. MTL/...)"
+                                        placeholder={t('stockRawMaterial.refBPlaceholder')}
                                         value={editForm.refB}
                                         onChange={(e) => setEditForm({ ...editForm, refB: e.target.value })}
                                       />
@@ -918,16 +924,16 @@ export function StockRawMaterial() {
                                     <td className="px-6 py-2.5">
                                       <div className="pl-6 text-xs text-muted-foreground flex items-center gap-2">
                                         <span className="w-1.5 h-1.5 rounded-full bg-primary/60 shrink-0"></span>
-                                        <span>Lot #{idx + 1}</span>
+                                        <span>{t('stockRawMaterial.lotNumber', { number: idx + 1 })}</span>
                                       </div>
                                     </td>
                                     <td className="px-6 py-2.5"><RefBValue value={record.refB} /></td>
                                     <td className="px-6 py-2.5 text-xs text-muted-foreground">{record.supplier || '-'}</td>
                                     <td className="px-6 py-2.5 text-xs font-medium text-foreground">
-                                      {format(new Date(record.date), 'dd MMM yyyy')}
+                                      {format(new Date(record.date), 'dd MMM yyyy', { locale: dateLocale })}
                                     </td>
                                     <td className="px-6 py-2.5 text-right text-xs font-bold text-foreground">
-                                      {record.qty.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: 4 })}
+                                      {record.qty.toLocaleString(locale, { minimumFractionDigits: 0, maximumFractionDigits: 4 })}
                                     </td>
                                     <td className="px-6 py-2.5 text-center text-xs text-muted-foreground">
                                       <span className="bg-secondary/60 text-secondary-foreground px-2 py-0.5 rounded text-[11px]">
@@ -939,7 +945,7 @@ export function StockRawMaterial() {
                                         <button
                                           onClick={() => handleEditClick(record)}
                                           className="p-1 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition-colors"
-                                          title="Edit Lot"
+                                          title={t('stockRawMaterial.editLot')}
                                         >
                                           <Pencil className="w-3.5 h-3.5" />
                                         </button>
@@ -947,7 +953,7 @@ export function StockRawMaterial() {
                                           onClick={() => handleDelete(record.id)}
                                           disabled={deleteMutation.isPending && deleteMutation.variables === record.id}
                                           className="p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
-                                          title="Hapus Lot"
+                                          title={t('stockRawMaterial.deleteLot')}
                                         >
                                           {deleteMutation.isPending && deleteMutation.variables === record.id ? (
                                             <Loader2 className="w-3.5 h-3.5 animate-spin text-destructive" />

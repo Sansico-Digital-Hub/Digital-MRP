@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { Loader2, Plus, X } from 'lucide-react';
-import { usePeriods, useCreatePeriod, monthLabel } from '../hooks/usePeriods';
+import { usePeriods, useCreatePeriod, monthLabel, periodDisplayLabel } from '../hooks/usePeriods';
+import { useTranslation } from '../i18n';
 
 /**
  * Pemilih PERIODE untuk modal Import Excel dan form Isi/Add Manual.
@@ -12,7 +13,7 @@ import { usePeriods, useCreatePeriod, monthLabel } from '../hooks/usePeriods';
 export function PeriodSelect({
   value,
   onChange,
-  label = 'Periode',
+  label,
   className = '',
 }: {
   value: string | null;
@@ -20,6 +21,8 @@ export function PeriodSelect({
   label?: string;
   className?: string;
 }) {
+  const { t, lang } = useTranslation();
+  const labelText = label ?? t('components.periodLabel');
   const { data: periodsRes } = usePeriods();
   const periods = periodsRes?.data ?? [];
   const createPeriod = useCreatePeriod();
@@ -37,14 +40,14 @@ export function PeriodSelect({
       setMonth('');
       onChange(res.data.id);
     } catch (e: any) {
-      setError(e?.message || 'Gagal membuat periode.');
+      setError(e?.message || t('components.periodCreateFailed'));
     }
   };
 
   return (
     <div className={className}>
       <label className="block text-sm font-medium text-gray-700 mb-1">
-        {label} <span className="text-red-500">*</span>
+        {labelText} <span className="text-red-500">*</span>
       </label>
 
       {adding ? (
@@ -67,7 +70,9 @@ export function PeriodSelect({
             ) : (
               <Plus className="w-4 h-4" />
             )}
-            Buat {month ? monthLabel(month) : 'periode'}
+            {t('components.createPeriod', {
+              label: month ? monthLabel(month, lang) : t('components.periodLower'),
+            })}
           </button>
           <button
             type="button"
@@ -77,7 +82,7 @@ export function PeriodSelect({
               setError(null);
             }}
             className="inline-flex items-center gap-1 px-2 py-2 text-sm rounded-md border text-gray-600 hover:bg-gray-50"
-            title="Batal tambah periode"
+            title={t('components.cancelAddPeriod')}
           >
             <X className="w-4 h-4" />
           </button>
@@ -94,25 +99,25 @@ export function PeriodSelect({
           }}
           className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary"
         >
-          <option value="">— Pilih periode —</option>
+          <option value="">{t('components.periodPlaceholder')}</option>
           {periods.map((p) => (
             <option key={p.id} value={p.id}>
-              {p.label}
-              {p.isLocked ? ' 🔒 (terkunci)' : ''}
+              {periodDisplayLabel(p, lang)}
+              {p.isLocked ? t('components.periodLocked') : ''}
             </option>
           ))}
-          <option value="__new__">+ Tambah periode baru…</option>
+          <option value="__new__">{t('components.addPeriod')}</option>
         </select>
       )}
 
       {!adding && !value && (
         <p className="text-xs text-amber-600 mt-1">
-          Pilih periode dulu — data tidak bisa diupload/diinput sebelum periode ditentukan.
+          {t('components.periodRequired')}
         </p>
       )}
       {value && !adding && (
         <p className="text-xs text-muted-foreground mt-1">
-          Data akan disimpan ke periode ini. Periode lain tidak terpengaruh.
+          {t('components.periodSaved')}
         </p>
       )}
       {error && <p className="text-xs text-red-600 mt-1">{error}</p>}

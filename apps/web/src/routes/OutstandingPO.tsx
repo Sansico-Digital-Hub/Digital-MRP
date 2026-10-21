@@ -12,10 +12,12 @@ import {
   type OutstandingPOUploadResult
 } from '../hooks/useOutstandingPO';
 import { FileSpreadsheet, Plus, Upload, Loader2, Search, Pencil, Trash2, X, Check, Save, Folder, ArrowLeft, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Lock, CalendarPlus, AlertTriangle } from 'lucide-react';
-import { usePeriods, useCreatePeriod, monthLabel } from '../hooks/usePeriods';
+import { usePeriods, useCreatePeriod, monthLabel, periodDisplayLabel } from '../hooks/usePeriods';
 import { PeriodSelect } from '../components/PeriodSelect';
-import { RefBSummary, RefBValue, matchesMtl, REF_B_MTL_MESSAGE } from '../components/RefB';
+import { RefBSummary, RefBValue, matchesMtl } from '../components/RefB';
 import { format } from 'date-fns';
+import { useTranslation, localeCode, dateLocale } from '../i18n';
+import type { Lang } from '../i18n';
 
 /** Satu baris Outstanding PO sebelum disimpan (hasil parse Excel / edit di preview). */
 type OutstandingPORow = Omit<OutstandingPOData, 'id' | 'periodId' | 'createdAt' | 'updatedAt'>;
@@ -55,14 +57,14 @@ interface PoGroup<T> {
   deliveredTotals: UnitTotal[];
 }
 
-const fmtQty = (n: number, decimals = 4) =>
-  n.toLocaleString(undefined, { minimumFractionDigits: 0, maximumFractionDigits: decimals });
+const fmtQty = (n: number, lang: Lang = 'id', decimals = 4) =>
+  n.toLocaleString(localeCode(lang), { minimumFractionDigits: 0, maximumFractionDigits: decimals });
 
 /** Format tanggal yang tidak melempar error untuk nilai tidak valid. */
-function safeFormatDate(value: string | Date | null | undefined): string {
+function safeFormatDate(value: string | Date | null | undefined, lang: Lang = 'id'): string {
   if (!value) return '—';
   const d = new Date(value);
-  return Number.isNaN(d.getTime()) ? String(value) : format(d, 'dd MMM yyyy');
+  return Number.isNaN(d.getTime()) ? String(value) : format(d, 'dd MMM yyyy', { locale: dateLocale(lang) });
 }
 
 function addUnitTotal(list: UnitTotal[], unit: string, qty: number) {
@@ -81,7 +83,7 @@ function addUnitTotal(list: UnitTotal[], unit: string, qty: number) {
  *  - Badge jumlah PO = jumlah NOMOR PO UNIK, bukan jumlah baris.
  *  - Total qty dihitung PER SATUAN, supaya kg dan rim tidak tercampur.
  */
-function buildPoGroups<T extends PoRowLike>(rows: T[]): PoGroup<T>[] {
+function buildPoGroups<T extends PoRowLike>(rows: T[], lang: Lang = 'id'): PoGroup<T>[] {
   const map = new Map<string, PoGroup<T>>();
 
   for (const r of rows) {
@@ -109,7 +111,7 @@ function buildPoGroups<T extends PoRowLike>(rows: T[]): PoGroup<T>[] {
     const ref = (r.refB || '').trim();
     if (ref && !g.refBs.includes(ref)) g.refBs.push(ref);
 
-    const dateLabel = safeFormatDate(r.planReceivedDate);
+    const dateLabel = safeFormatDate(r.planReceivedDate, lang);
     if (dateLabel !== '—' && !g.planDateLabels.includes(dateLabel)) g.planDateLabels.push(dateLabel);
 
     const sup = (r.supplierName || '').trim();
@@ -137,10 +139,11 @@ function uniquePoCount(rows: Array<{ poNumber: string }>): number {
 
 /** Badge nomor PO di baris grup (maks 3, sisanya jadi "+N lagi"). */
 function PoNumberBadges({ numbers }: { numbers: string[] }) {
+  const { t } = useTranslation();
   if (numbers.length === 0) return <span className="text-muted-foreground text-xs">—</span>;
   const shown = numbers.slice(0, 3);
   return (
-    <div className="flex flex-wrap gap-1 max-w-[220px]" title={`PO: ${numbers.join(', ')}`}>
+    <div className="flex flex-wrap gap-1 max-w-[220px]" title={t('outstandingPo.poTooltip', { numbers: numbers.join(', ') })}>
       {shown.map((no) => (
         <span key={no} className="font-mono text-[11px] bg-primary/10 text-primary px-1.5 py-0.5 rounded whitespace-nowrap">
           {no}
@@ -148,7 +151,7 @@ function PoNumberBadges({ numbers }: { numbers: string[] }) {
       ))}
       {numbers.length > shown.length && (
         <span className="text-[11px] font-semibold text-muted-foreground self-center">
-          +{numbers.length - shown.length} lagi
+          {t('outstandingPo.moreItems', { count: numbers.length - shown.length })}
         </span>
       )}
     </div>
@@ -168,6 +171,7 @@ function UnitTotals({
   unitOnly?: boolean;
   strong?: boolean;
 }) {
+  const { lang } = useTranslation();
   if (totals.length === 0) return <span className="text-muted-foreground text-xs">—</span>;
   return (
     <div className={`flex flex-col gap-0.5 ${unitOnly ? 'items-center' : 'items-end'}`}>
@@ -177,7 +181,7 @@ function UnitTotals({
             <span className="bg-primary/10 text-primary font-semibold px-2.5 py-1 rounded text-xs">{t.unit}</span>
           ) : (
             <span className={`tabular-nums text-sm ${strong ? 'font-extrabold text-foreground' : 'text-foreground'}`}>
-              {fmtQty(t.qty)}
+              {fmtQty(t.qty, lang)}
             </span>
           )}
         </span>
@@ -187,6 +191,7 @@ function UnitTotals({
 }
 
 export function OutstandingPO() {
+  const { t, lang } = useTranslation();
   // Periode upload = keranjang data. WAJIB dipilih sebelum upload/isi manual.
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
   // Periode tujuan untuk Import / Add Manual. Ikut periode yang sedang dibuka,
@@ -210,7 +215,7 @@ export function OutstandingPO() {
       setNewPeriodMonth('');
       setSelectedPeriodId(res.data.id);
     } catch (error: any) {
-      alert(error.message || 'Gagal membuat periode.');
+      alert(error.message || t('components.periodCreateFailed'));
     }
   };
   const uploadMutation = useUploadOutstandingPO();
@@ -283,14 +288,14 @@ export function OutstandingPO() {
           setPreviewData(res.data);
         } else {
           setPreviewData([]);
-          alert(res.message || 'No valid data found in file.');
+          alert(res.message || t('outstandingPo.errors.noValidData'));
         }
         if (fileInputRef.current) fileInputRef.current.value = '';
       },
       onError: (error: any) => {
         setImportErrors([]);
         setUploadSummary(null);
-        alert(`Failed to upload file: ${error.message}`);
+        alert(t('outstandingPo.errors.uploadFailed', { message: error.message }));
         if (fileInputRef.current) fileInputRef.current.value = '';
       }
     });
@@ -299,31 +304,35 @@ export function OutstandingPO() {
   const handleSaveImport = (mode: 'add' | 'overwrite') => {
     if (previewData.length === 0) return;
     if (!targetPeriodId) {
-      alert('Pilih periode dulu sebelum menyimpan data.');
+      alert(t('outstandingPo.errors.selectPeriodSave'));
       return;
     }
     const missingPo = previewData.filter((r) => !String(r.poNumber || '').trim());
     if (missingPo.length > 0) {
       alert(
-        `${missingPo.length} baris belum punya PO Number. PO Number wajib diisi untuk semua baris.`,
+        t('outstandingPo.errors.missingPo', { count: missingPo.length }),
       );
       return;
     }
 
-    let confirmMsg = `Tambahkan ${previewData.length} baris ke periode "${targetPeriod?.label}"?`;
+    let confirmMsg = t('outstandingPo.errors.confirmAdd', {
+      count: previewData.length,
+      period: targetPeriod?.label,
+    });
     if (mode === 'overwrite') {
       const existing = targetPeriod?.counts.OUTSTANDING_PO ?? 0;
-      confirmMsg =
-        `PERHATIAN: seluruh data Outstanding PO di periode "${targetPeriod?.label}" (${existing} baris) ` +
-        `akan DIGANTI dengan ${previewData.length} baris dari file ini.\n\n` +
-        'Periode lain tidak terpengaruh. Lanjutkan?';
+      confirmMsg = t('outstandingPo.errors.confirmOverwrite', {
+        period: targetPeriod?.label,
+        existing,
+        count: previewData.length,
+      });
     }
 
     if (!window.confirm(confirmMsg)) return;
 
     importMutation.mutate({ data: previewData, mode, periodId: targetPeriodId }, {
       onSuccess: () => {
-        alert('Data imported successfully!');
+        alert(t('outstandingPo.errors.importSuccess'));
         setPreviewData([]);
         setImportErrors([]);
         setUploadSummary(null);
@@ -331,7 +340,7 @@ export function OutstandingPO() {
         setPreviewEditingIndex(null);
       },
       onError: (error: any) => {
-        alert(`Failed to import data: ${error.message}`);
+        alert(t('outstandingPo.errors.importFailed', { message: error.message }));
       }
     });
   };
@@ -352,11 +361,11 @@ export function OutstandingPO() {
 
   const handlePreviewSaveEdit = (index: number) => {
     if (!previewEditForm.poNumber.trim() || !previewEditForm.supplierName || !previewEditForm.itemDesc || !previewEditForm.qtyOrder || !previewEditForm.qtyDelivered) {
-      alert('Please fill all required fields (PO Number wajib diisi)');
+      alert(t('outstandingPo.errors.fillRequiredFields'));
       return;
     }
     if (!matchesMtl(previewEditForm.refB)) {
-      alert(REF_B_MTL_MESSAGE);
+      alert(t('components.refBMtlMessage'));
       return;
     }
     const updatedData = [...previewData];
@@ -376,7 +385,7 @@ export function OutstandingPO() {
   };
 
   const handlePreviewDelete = (index: number) => {
-    if (window.confirm('Are you sure you want to remove this record from the preview?')) {
+    if (window.confirm(t('outstandingPo.errors.confirmRemovePreview'))) {
       const updatedData = [...previewData];
       updatedData.splice(index, 1);
       setPreviewData(updatedData);
@@ -387,17 +396,17 @@ export function OutstandingPO() {
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualForm.poNumber.trim() || !manualForm.planReceivedDate || !manualForm.supplierName || !manualForm.itemDesc || !manualForm.qtyOrder || !manualForm.qtyDelivered) {
-      alert('Please fill all required fields (PO Number wajib diisi)');
+      alert(t('outstandingPo.errors.fillRequiredFields'));
       return;
     }
 
     if (!matchesMtl(manualForm.refB)) {
-      alert(REF_B_MTL_MESSAGE);
+      alert(t('components.refBMtlMessage'));
       return;
     }
 
     if (!targetPeriodId) {
-      alert('Pilih periode dulu sebelum menambah data manual.');
+      alert(t('outstandingPo.errors.selectPeriodManual'));
       return;
     }
 
@@ -428,7 +437,7 @@ export function OutstandingPO() {
         setIsManualOpen(false);
       },
       onError: (error: any) => {
-        alert(`Failed to add record: ${error.message}`);
+        alert(t('outstandingPo.errors.addFailed', { message: error.message }));
       }
     });
   };
@@ -450,11 +459,11 @@ export function OutstandingPO() {
 
   const handleSaveEdit = (id: string) => {
     if (!editForm.poNumber.trim() || !editForm.planReceivedDate || !editForm.supplierName || !editForm.itemDesc || !editForm.qtyOrder || !editForm.qtyDelivered) {
-      alert('Please fill all required fields (PO Number wajib diisi)');
+      alert(t('outstandingPo.errors.fillRequiredFields'));
       return;
     }
     if (!matchesMtl(editForm.refB)) {
-      alert(REF_B_MTL_MESSAGE);
+      alert(t('components.refBMtlMessage'));
       return;
     }
 
@@ -473,14 +482,14 @@ export function OutstandingPO() {
       }
     }, {
       onSuccess: () => setEditingId(null),
-      onError: (error: any) => alert(`Failed to update record: ${error.message}`)
+      onError: (error: any) => alert(t('outstandingPo.errors.updateFailed', { message: error.message }))
     });
   };
 
   const handleDelete = (id: string) => {
-    if (window.confirm('Are you sure you want to delete this record?')) {
+    if (window.confirm(t('outstandingPo.errors.confirmDelete'))) {
       deleteMutation.mutate(id, {
-        onError: (error: any) => alert(`Failed to delete record: ${error.message}`)
+        onError: (error: any) => alert(t('outstandingPo.errors.deleteFailed', { message: error.message }))
       });
     }
   };
@@ -497,10 +506,10 @@ export function OutstandingPO() {
 
   const handleBulkDelete = () => {
     if (selectedIds.length === 0) return;
-    if (window.confirm(`Are you sure you want to delete ${selectedIds.length} records?`)) {
+    if (window.confirm(t('outstandingPo.errors.confirmBulkDelete', { count: selectedIds.length }))) {
       bulkDeleteMutation.mutate(selectedIds, {
         onSuccess: () => setSelectedIds([]),
-        onError: (error: any) => alert(`Failed to delete records: ${error.message}`)
+        onError: (error: any) => alert(t('outstandingPo.errors.bulkDeleteFailed', { message: error.message }))
       });
     }
   };
@@ -524,7 +533,7 @@ export function OutstandingPO() {
     [records, searchTerm],
   );
 
-  const groupedByItem = useMemo(() => buildPoGroups(filteredRecords), [filteredRecords]);
+  const groupedByItem = useMemo(() => buildPoGroups(filteredRecords, lang), [filteredRecords, lang]);
 
   /** Items = jumlah grup ukuran unik, POs = jumlah NOMOR PO unik. */
   const totalItems = groupedByItem.length;
@@ -566,7 +575,7 @@ export function OutstandingPO() {
     () => previewData.filter((record) => matchSearch(record, previewSearchTerm)),
     [previewData, previewSearchTerm],
   );
-  const previewGroups = useMemo(() => buildPoGroups(filteredPreviewData), [filteredPreviewData]);
+  const previewGroups = useMemo(() => buildPoGroups(filteredPreviewData, lang), [filteredPreviewData, lang]);
   const previewPos = useMemo(() => uniquePoCount(filteredPreviewData), [filteredPreviewData]);
 
   const togglePreviewExpand = (itemDesc: string) => {
@@ -585,9 +594,9 @@ export function OutstandingPO() {
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">Outstanding PO</h1>
+          <h1 className="text-2xl font-bold tracking-tight">{t('outstandingPo.title')}</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Manage outstanding PO data. Upload from Excel or add manually.
+            {t('outstandingPo.subtitle')}
           </p>
         </div>
         
@@ -599,7 +608,7 @@ export function OutstandingPO() {
             className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground hover:bg-secondary/80 rounded-md font-medium text-sm transition-colors"
           >
             {uploadMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-            Import Excel
+            {t('outstandingPo.importExcel')}
           </button>
           
           <button
@@ -608,7 +617,7 @@ export function OutstandingPO() {
             className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md font-medium text-sm transition-colors"
           >
             <Plus className="w-4 h-4" />
-            Add Manual
+            {t('outstandingPo.addManual')}
           </button>
         </div>
       </div>
@@ -618,37 +627,37 @@ export function OutstandingPO() {
           <div className="p-5 border-b bg-primary/5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
               <h2 className="text-lg font-bold text-primary flex items-center gap-2">
-                <FileSpreadsheet className="w-5 h-5" /> Data Preview
+                <FileSpreadsheet className="w-5 h-5" /> {t('outstandingPo.dataPreview')}
               </h2>
               <p className="text-sm text-muted-foreground mt-1 flex items-center gap-2 flex-wrap">
-                <span>You are about to import <strong>{previewData.length}</strong> records.</span>
+                <span>{t('outstandingPo.aboutToImportPre')} <strong>{previewData.length}</strong> {t('outstandingPo.aboutToImportPost')}</span>
                 <span className="text-xs font-medium bg-background border px-2 py-0.5 rounded">
-                  {previewGroups.length} Items <span className="text-muted-foreground/40">•</span> {previewPos} POs
+                  {t('outstandingPo.itemsCount', { count: previewGroups.length })} <span className="text-muted-foreground/40">•</span> {t('outstandingPo.posCount', { count: previewPos })}
                 </span>
               </p>
             </div>
             <div className="flex flex-wrap gap-2 items-center">
               <div className="relative w-full sm:w-64 mr-2">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground w-4 h-4" />
-                <input type="text" placeholder="Cari PO Number / item..." className="w-full pl-9 pr-4 py-1.5 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary" value={previewSearchTerm} onChange={(e) => setPreviewSearchTerm(e.target.value)} />
+                <input type="text" placeholder={t('outstandingPo.searchPreviewPlaceholder')} className="w-full pl-9 pr-4 py-1.5 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary" value={previewSearchTerm} onChange={(e) => setPreviewSearchTerm(e.target.value)} />
               </div>
               <div className="flex items-center gap-1 bg-background border rounded-md p-0.5 text-xs text-muted-foreground">
-                <button onClick={expandAllPreview} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title="Buka Semua Detail">
-                  <ChevronsDown className="w-3.5 h-3.5" /> Buka
+                <button onClick={expandAllPreview} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title={t('outstandingPo.expandAll')}>
+                  <ChevronsDown className="w-3.5 h-3.5" /> {t('outstandingPo.expand')}
                 </button>
                 <span className="text-muted-foreground/30">|</span>
-                <button onClick={collapseAllPreview} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title="Tutup Semua Detail">
-                  <ChevronsUp className="w-3.5 h-3.5" /> Tutup
+                <button onClick={collapseAllPreview} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title={t('outstandingPo.collapseAll')}>
+                  <ChevronsUp className="w-3.5 h-3.5" /> {t('common.close')}
                 </button>
               </div>
               <button onClick={() => handleSaveImport('add')} disabled={importMutation.isPending || !targetPeriodId} className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-md font-medium text-sm disabled:opacity-50">
-                {importMutation.isPending && importMutation.variables?.mode === 'add' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save (Add)
+                {importMutation.isPending && importMutation.variables?.mode === 'add' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} {t('outstandingPo.saveAdd')}
               </button>
               <button onClick={() => handleSaveImport('overwrite')} disabled={importMutation.isPending || !targetPeriodId} className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-md font-medium text-sm disabled:opacity-50">
-                {importMutation.isPending && importMutation.variables?.mode === 'overwrite' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} Save (Overwrite)
+                {importMutation.isPending && importMutation.variables?.mode === 'overwrite' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />} {t('outstandingPo.saveOverwrite')}
               </button>
               <button onClick={() => setPreviewData([])} disabled={importMutation.isPending} className="flex items-center gap-2 px-4 py-2 bg-muted text-muted-foreground hover:bg-muted/80 rounded-md font-medium text-sm">
-                <X className="w-4 h-4" /> Cancel
+                <X className="w-4 h-4" /> {t('common.cancel')}
               </button>
             </div>
           </div>
@@ -658,27 +667,26 @@ export function OutstandingPO() {
           {uploadSummary && (
             <div className="mx-5 mt-4 border border-emerald-200 dark:border-emerald-500/30 bg-emerald-50/60 dark:bg-emerald-500/5 rounded-lg px-4 py-3">
               <p className="text-sm font-semibold text-emerald-800 dark:text-emerald-300 mb-1">
-                Ringkasan file Outstanding PO
+                {t('outstandingPo.summaryTitle')}
               </p>
               <div className="flex flex-wrap gap-x-6 gap-y-1 text-xs text-foreground">
                 <span>
-                  Total baris di file: <strong>{uploadSummary.totalRows}</strong>
+                  {t('outstandingPo.summaryTotalRows')} <strong>{uploadSummary.totalRows}</strong>
                 </span>
                 <span className="text-emerald-700 dark:text-emerald-400">
-                  Masuk (mengandung "MTL"): <strong>{uploadSummary.included}</strong>
+                  {t('outstandingPo.summaryIncluded')} <strong>{uploadSummary.included}</strong>
                 </span>
                 <span className="text-amber-700 dark:text-amber-400">
-                  Dilewati (tidak mengandung "MTL"): <strong>{uploadSummary.skippedNoMtl}</strong>
+                  {t('outstandingPo.summarySkipped')} <strong>{uploadSummary.skippedNoMtl}</strong>
                 </span>
                 {uploadSummary.failed > 0 && (
                   <span className="text-destructive">
-                    Gagal: <strong>{uploadSummary.failed}</strong>
+                    {t('outstandingPo.summaryFailed')} <strong>{uploadSummary.failed}</strong>
                   </span>
                 )}
               </div>
               <p className="text-[11px] text-muted-foreground mt-1">
-                Hanya baris dengan kolom <span className="font-semibold">PR Ref-B</span> mengandung
-                "MTL" yang bisa diimpor.
+                {t('outstandingPo.onlyMtlRowsPre')} <span className="font-semibold">PR Ref-B</span> {t('outstandingPo.onlyMtlRowsPost')}
               </p>
             </div>
           )}
@@ -687,20 +695,19 @@ export function OutstandingPO() {
               <div className="px-4 py-3 flex items-center gap-2 border-b border-destructive/20 bg-destructive/10">
                 <AlertTriangle className="w-4 h-4 text-destructive shrink-0" />
                 <p className="text-sm font-semibold text-destructive">
-                  {importErrors.length} baris GAGAL diimpor — baris valid tetap diproses
+                  {t('outstandingPo.importErrorsTitle', { count: importErrors.length })}
                 </p>
               </div>
               <ul className="max-h-40 overflow-auto divide-y divide-destructive/10 text-xs">
                 {importErrors.map((err, i) => (
                   <li key={i} className="px-4 py-2 flex items-start gap-2 text-destructive">
-                    <span className="font-mono font-semibold shrink-0">Baris {err.row}</span>
+                    <span className="font-mono font-semibold shrink-0">{t('outstandingPo.rowLabel', { row: err.row })}</span>
                     <span>{err.message.replace(/^Baris \d+\s*(\(PO [^)]*\))?\s*:?\s*/, '')}</span>
                   </li>
                 ))}
               </ul>
               <p className="px-4 py-2 text-[11px] text-muted-foreground border-t border-destructive/10">
-                Perbaiki kolom <span className="font-semibold">PO NO</span> di file Excel lalu impor ulang,
-                atau tambahkan PO Number langsung pada baris pratinjau di bawah.
+                {t('outstandingPo.fixPoNoPre')} <span className="font-semibold">PO NO</span> {t('outstandingPo.fixPoNoPost')}
               </p>
             </div>
           )}
@@ -708,21 +715,21 @@ export function OutstandingPO() {
             <table className="w-full text-sm text-left">
               <thead className="text-xs text-muted-foreground uppercase bg-secondary/50 sticky top-0 z-10 shadow-sm">
                 <tr>
-                  <th className="px-6 py-4 font-semibold">Plan Date</th>
-                  <th className="px-6 py-4 font-semibold">PO Number</th>
-                  <th className="px-6 py-4 font-semibold">Supplier</th>
-                  <th className="px-6 py-4 font-semibold w-1/4">Item Desc</th>
-                  <th className="px-6 py-4 font-semibold">Ref-B</th>
-                  <th className="px-6 py-4 font-semibold text-right">Qty Order</th>
-                  <th className="px-6 py-4 font-semibold text-center">Unit</th>
-                  <th className="px-6 py-4 font-semibold text-right">Qty Delivered</th>
-                  <th className="px-6 py-4 font-semibold text-center">Unit</th>
-                  <th className="px-6 py-4 font-semibold text-right">Aksi</th>
+                  <th className="px-6 py-4 font-semibold">{t('outstandingPo.planDate')}</th>
+                  <th className="px-6 py-4 font-semibold">{t('outstandingPo.poNumber')}</th>
+                  <th className="px-6 py-4 font-semibold">{t('outstandingPo.supplier')}</th>
+                  <th className="px-6 py-4 font-semibold w-1/4">{t('outstandingPo.itemDesc')}</th>
+                  <th className="px-6 py-4 font-semibold">{t('outstandingPo.refBLabel')}</th>
+                  <th className="px-6 py-4 font-semibold text-right">{t('outstandingPo.qtyOrder')}</th>
+                  <th className="px-6 py-4 font-semibold text-center">{t('outstandingPo.unit')}</th>
+                  <th className="px-6 py-4 font-semibold text-right">{t('outstandingPo.qtyDelivered')}</th>
+                  <th className="px-6 py-4 font-semibold text-center">{t('outstandingPo.unit')}</th>
+                  <th className="px-6 py-4 font-semibold text-right">{t('common.actions')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
                 {previewGroups.length === 0 ? (
-                   <tr><td colSpan={10} className="px-6 py-8 text-center text-muted-foreground">No matching data found in preview.</td></tr>
+                   <tr><td colSpan={10} className="px-6 py-8 text-center text-muted-foreground">{t('outstandingPo.noPreviewData')}</td></tr>
                 ) : previewGroups.map((group) => {
                   const isExpanded = expandedPreviewDescs.has(group.itemDesc);
                   return (
@@ -732,7 +739,7 @@ export function OutstandingPO() {
                         <td className="px-6 py-3.5 text-muted-foreground text-xs font-medium whitespace-nowrap">
                           {group.planDateLabels.length === 1
                             ? group.planDateLabels[0]
-                            : `${group.planDateLabels.length} Plan Dates`}
+                            : t('outstandingPo.planDatesCount', { count: group.planDateLabels.length })}
                         </td>
                         <td className="px-6 py-3.5"><PoNumberBadges numbers={group.poNumbers} /></td>
                         <td className="px-6 py-3.5 text-muted-foreground text-xs">{group.supplierNames || '-'}</td>
@@ -741,7 +748,7 @@ export function OutstandingPO() {
                             <button
                               onClick={() => togglePreviewExpand(group.itemDesc)}
                               className="p-1 hover:bg-muted/80 rounded transition-colors text-muted-foreground hover:text-foreground shrink-0"
-                              title={isExpanded ? 'Tutup Detail' : 'Buka Detail'}
+                              title={isExpanded ? t('outstandingPo.collapseDetail') : t('outstandingPo.expandDetail')}
                             >
                               {isExpanded ? <ChevronDown className="w-4 h-4 text-primary" /> : <ChevronRight className="w-4 h-4" />}
                             </button>
@@ -752,7 +759,7 @@ export function OutstandingPO() {
                               {group.itemDesc}
                             </span>
                             <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-secondary text-secondary-foreground">
-                              {group.poNumbers.length} {group.poNumbers.length > 1 ? 'POs' : 'PO'}
+                              {t('outstandingPo.posCount', { count: group.poNumbers.length })}
                             </span>
                           </div>
                         </td>
@@ -766,7 +773,7 @@ export function OutstandingPO() {
                             onClick={() => togglePreviewExpand(group.itemDesc)}
                             className="text-xs text-primary hover:text-primary/80 font-medium inline-flex items-center gap-1 p-1 hover:bg-primary/10 rounded transition-colors"
                           >
-                            {isExpanded ? 'Tutup' : 'Detail'}
+                            {isExpanded ? t('common.close') : t('common.detail')}
                             {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
                           </button>
                         </td>
@@ -777,27 +784,27 @@ export function OutstandingPO() {
                         const originalIndex = previewData.indexOf(record);
                         return (
                           <tr key={originalIndex} className="bg-muted/20 hover:bg-muted/35 transition-colors border-l-4 border-l-primary/60">
-                            <td className="px-6 py-2.5 font-medium whitespace-nowrap text-xs text-foreground">{safeFormatDate(record.planReceivedDate)}</td>
+                            <td className="px-6 py-2.5 font-medium whitespace-nowrap text-xs text-foreground">{safeFormatDate(record.planReceivedDate, lang)}</td>
                             {previewEditingIndex === originalIndex ? (
                               <>
-                                <td className="px-6 py-2.5"><input type="text" className="w-full h-8 px-2 border rounded text-xs font-mono" placeholder="PO Number" value={previewEditForm.poNumber} onChange={(e) => setPreviewEditForm({ ...previewEditForm, poNumber: e.target.value })} /></td>
+                                <td className="px-6 py-2.5"><input type="text" className="w-full h-8 px-2 border rounded text-xs font-mono" placeholder={t('outstandingPo.poNumber')} value={previewEditForm.poNumber} onChange={(e) => setPreviewEditForm({ ...previewEditForm, poNumber: e.target.value })} /></td>
                                 <td className="px-6 py-2.5"><input type="text" className="w-full h-8 px-2 border rounded text-xs" value={previewEditForm.supplierName} onChange={(e) => setPreviewEditForm({ ...previewEditForm, supplierName: e.target.value })} /></td>
-                                <td className="px-6 py-2.5"><input type="text" className="w-full h-8 px-2 border rounded text-xs" placeholder="Item Desc" value={previewEditForm.itemDesc} onChange={(e) => setPreviewEditForm({ ...previewEditForm, itemDesc: e.target.value })} /></td>
-                                <td className="px-6 py-2.5"><input type="text" className="w-full h-8 px-2 border rounded text-xs font-mono" placeholder="Ref-B (mis. MTL/...)" value={previewEditForm.refB} onChange={(e) => setPreviewEditForm({ ...previewEditForm, refB: e.target.value })} /></td>
+                                <td className="px-6 py-2.5"><input type="text" className="w-full h-8 px-2 border rounded text-xs" placeholder={t('outstandingPo.itemDesc')} value={previewEditForm.itemDesc} onChange={(e) => setPreviewEditForm({ ...previewEditForm, itemDesc: e.target.value })} /></td>
+                                <td className="px-6 py-2.5"><input type="text" className="w-full h-8 px-2 border rounded text-xs font-mono" placeholder={t('outstandingPo.refBInputPlaceholder')} value={previewEditForm.refB} onChange={(e) => setPreviewEditForm({ ...previewEditForm, refB: e.target.value })} /></td>
                                 <td className="px-6 py-2.5"><input type="number" step="any" className="w-full h-8 px-2 border rounded text-xs text-right" value={previewEditForm.qtyOrder} onChange={(e) => setPreviewEditForm({ ...previewEditForm, qtyOrder: e.target.value })} /></td>
                                 <td className="px-6 py-2.5">
                                   <select className="w-full h-8 px-2 border rounded text-xs" value={previewEditForm.qtyOrderUnit} onChange={(e) => setPreviewEditForm({ ...previewEditForm, qtyOrderUnit: e.target.value })}>
-                                    <option value="kg">kg</option>
-                                    <option value="rim">rim</option>
-                                    <option value="sheets">sheets</option>
+                                    <option value="kg">{t('unit.kg')}</option>
+                                    <option value="rim">{t('unit.rim')}</option>
+                                    <option value="sheets">{t('unit.sheets')}</option>
                                   </select>
                                 </td>
                                 <td className="px-6 py-2.5"><input type="number" step="any" className="w-full h-8 px-2 border rounded text-xs text-right" value={previewEditForm.qtyDelivered} onChange={(e) => setPreviewEditForm({ ...previewEditForm, qtyDelivered: e.target.value })} /></td>
                                 <td className="px-6 py-2.5">
                                   <select className="w-full h-8 px-2 border rounded text-xs" value={previewEditForm.qtyDeliveredUnit} onChange={(e) => setPreviewEditForm({ ...previewEditForm, qtyDeliveredUnit: e.target.value })}>
-                                    <option value="kg">kg</option>
-                                    <option value="rim">rim</option>
-                                    <option value="sheets">sheets</option>
+                                    <option value="kg">{t('unit.kg')}</option>
+                                    <option value="rim">{t('unit.rim')}</option>
+                                    <option value="sheets">{t('unit.sheets')}</option>
                                   </select>
                                 </td>
                                 <td className="px-6 py-2.5 text-right">
@@ -812,7 +819,7 @@ export function OutstandingPO() {
                             ) : (
                               <>
                                 <td className="px-6 py-2.5 font-mono text-xs font-semibold text-primary whitespace-nowrap">
-                                  {record.poNumber || <span className="text-destructive font-sans">(kosong)</span>}
+                                  {record.poNumber || <span className="text-destructive font-sans">{t('outstandingPo.emptyPo')}</span>}
                                 </td>
                                 <td className="px-6 py-2.5 text-xs text-muted-foreground">{record.supplierName}</td>
                                 <td className="px-6 py-2.5">
@@ -821,18 +828,18 @@ export function OutstandingPO() {
                                   </div>
                                 </td>
                                 <td className="px-6 py-2.5"><RefBValue value={record.refB} /></td>
-                                <td className="px-6 py-2.5 text-right text-xs font-bold text-foreground tabular-nums">{fmtQty(record.qtyOrder)}</td>
+                                <td className="px-6 py-2.5 text-right text-xs font-bold text-foreground tabular-nums">{fmtQty(record.qtyOrder, lang)}</td>
                                 <td className="px-6 py-2.5 text-center">
                                   <span className="bg-secondary/60 text-secondary-foreground px-2 py-0.5 rounded text-[11px]">{record.qtyOrderUnit}</span>
                                 </td>
-                                <td className="px-6 py-2.5 text-right text-xs font-bold text-foreground tabular-nums">{fmtQty(record.qtyDelivered)}</td>
+                                <td className="px-6 py-2.5 text-right text-xs font-bold text-foreground tabular-nums">{fmtQty(record.qtyDelivered, lang)}</td>
                                 <td className="px-6 py-2.5 text-center">
                                   <span className="bg-secondary/60 text-secondary-foreground px-2 py-0.5 rounded text-[11px]">{record.qtyDeliveredUnit}</span>
                                 </td>
                                 <td className="px-6 py-2.5 text-right">
                                   <div className="flex items-center justify-end gap-1">
-                                    <button onClick={() => handlePreviewEditClick(originalIndex, record)} className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded" title="Edit baris"><Pencil className="w-4 h-4" /></button>
-                                    <button onClick={() => handlePreviewDelete(originalIndex)} className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded" title="Hapus dari pratinjau">
+                                    <button onClick={() => handlePreviewEditClick(originalIndex, record)} className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded" title={t('outstandingPo.editRow')}><Pencil className="w-4 h-4" /></button>
+                                    <button onClick={() => handlePreviewDelete(originalIndex)} className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded" title={t('outstandingPo.deleteFromPreview')}>
                                       <Trash2 className="w-4 h-4" />
                                     </button>
                                   </div>
@@ -853,7 +860,7 @@ export function OutstandingPO() {
         <>
           {isManualOpen && (
             <div className="bg-card border rounded-lg p-5 shadow-sm animate-in slide-in-from-top-2">
-              <h2 className="text-sm font-semibold mb-4">Add Outstanding PO Manual</h2>
+              <h2 className="text-sm font-semibold mb-4">{t('outstandingPo.addManualTitle')}</h2>
               <form onSubmit={handleManualSubmit} className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
                 <PeriodSelect
                   value={targetPeriodId}
@@ -862,57 +869,57 @@ export function OutstandingPO() {
                 />
                 <div className="space-y-1.5 md:col-span-3">
                   <label className="text-xs font-semibold text-muted-foreground uppercase">
-                    PO Number <span className="text-destructive">*</span>
+                    {t('outstandingPo.poNumber')} <span className="text-destructive">*</span>
                   </label>
-                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm font-mono" placeholder="mis. L1G000602" value={manualForm.poNumber} onChange={(e) => setManualForm({ ...manualForm, poNumber: e.target.value })} required />
+                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm font-mono" placeholder={t('outstandingPo.poNumberPlaceholder')} value={manualForm.poNumber} onChange={(e) => setManualForm({ ...manualForm, poNumber: e.target.value })} required />
                 </div>
                 <div className="space-y-1.5 md:col-span-3">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Plan Received Date</label>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('outstandingPo.planReceivedDate')}</label>
                   <input type="date" className="w-full h-10 px-3 border rounded-md text-sm" value={manualForm.planReceivedDate} onChange={(e) => setManualForm({ ...manualForm, planReceivedDate: e.target.value })} required />
                 </div>
                 <div className="space-y-1.5 md:col-span-3">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Supplier</label>
-                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm" placeholder="Supplier Name" value={manualForm.supplierName} onChange={(e) => setManualForm({ ...manualForm, supplierName: e.target.value })} required />
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('outstandingPo.supplier')}</label>
+                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm" placeholder={t('outstandingPo.supplierPlaceholder')} value={manualForm.supplierName} onChange={(e) => setManualForm({ ...manualForm, supplierName: e.target.value })} required />
                 </div>
                 <div className="space-y-1.5 md:col-span-3">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Item Desc</label>
-                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm" placeholder="Item Description" value={manualForm.itemDesc} onChange={(e) => setManualForm({ ...manualForm, itemDesc: e.target.value })} required />
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('outstandingPo.itemDesc')}</label>
+                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm" placeholder={t('outstandingPo.itemDescPlaceholder')} value={manualForm.itemDesc} onChange={(e) => setManualForm({ ...manualForm, itemDesc: e.target.value })} required />
                 </div>
                 <div className="space-y-1.5 md:col-span-3">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Ref-B <span className="text-destructive">*</span></label>
-                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm font-mono" placeholder="mis. MTL/JUL 26/RP11.000" value={manualForm.refB} onChange={(e) => setManualForm({ ...manualForm, refB: e.target.value })} required />
-                  <p className="text-[11px] text-muted-foreground">Wajib mengandung "MTL".</p>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('outstandingPo.refBLabel')} <span className="text-destructive">*</span></label>
+                  <input type="text" className="w-full h-10 px-3 border rounded-md text-sm font-mono" placeholder={t('outstandingPo.refBExample')} value={manualForm.refB} onChange={(e) => setManualForm({ ...manualForm, refB: e.target.value })} required />
+                  <p className="text-[11px] text-muted-foreground">{t('outstandingPo.refBMtlRequired')}</p>
                 </div>
 
                 <div className="space-y-1.5 md:col-span-3">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Qty Order</label>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('outstandingPo.qtyOrder')}</label>
                   <input type="number" step="any" className="w-full h-10 px-3 border rounded-md text-sm" placeholder="0" value={manualForm.qtyOrder} onChange={(e) => setManualForm({ ...manualForm, qtyOrder: e.target.value })} required />
                 </div>
                 <div className="space-y-1.5 md:col-span-3">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Order Unit</label>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('outstandingPo.orderUnit')}</label>
                   <select className="w-full h-10 px-3 border rounded-md text-sm" value={manualForm.qtyOrderUnit} onChange={(e) => setManualForm({ ...manualForm, qtyOrderUnit: e.target.value })}>
-                    <option value="kg">kg</option>
-                    <option value="rim">rim</option>
-                    <option value="sheets">sheets</option>
+                    <option value="kg">{t('unit.kg')}</option>
+                    <option value="rim">{t('unit.rim')}</option>
+                    <option value="sheets">{t('unit.sheets')}</option>
                   </select>
                 </div>
                 <div className="space-y-1.5 md:col-span-3">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Qty Delivered</label>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('outstandingPo.qtyDelivered')}</label>
                   <input type="number" step="any" className="w-full h-10 px-3 border rounded-md text-sm" placeholder="0" value={manualForm.qtyDelivered} onChange={(e) => setManualForm({ ...manualForm, qtyDelivered: e.target.value })} required />
                 </div>
                 <div className="space-y-1.5 md:col-span-3">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Delivered Unit</label>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('outstandingPo.deliveredUnit')}</label>
                   <select className="w-full h-10 px-3 border rounded-md text-sm" value={manualForm.qtyDeliveredUnit} onChange={(e) => setManualForm({ ...manualForm, qtyDeliveredUnit: e.target.value })}>
-                    <option value="kg">kg</option>
-                    <option value="rim">rim</option>
-                    <option value="sheets">sheets</option>
+                    <option value="kg">{t('unit.kg')}</option>
+                    <option value="rim">{t('unit.rim')}</option>
+                    <option value="sheets">{t('unit.sheets')}</option>
                   </select>
                 </div>
                 
                 <div className="flex gap-2 md:col-span-12 justify-end mt-2">
-                  <button type="button" onClick={() => setIsManualOpen(false)} className="h-10 px-4 bg-muted text-muted-foreground rounded-md font-medium text-sm">Cancel</button>
+                  <button type="button" onClick={() => setIsManualOpen(false)} className="h-10 px-4 bg-muted text-muted-foreground rounded-md font-medium text-sm">{t('common.cancel')}</button>
                   <button type="submit" disabled={addManualMutation.isPending || !targetPeriodId} className="h-10 px-6 bg-primary text-primary-foreground rounded-md font-medium text-sm flex items-center justify-center gap-2 disabled:opacity-50">
-                    {addManualMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />} Save
+                    {addManualMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />} {t('common.save')}
                   </button>
                 </div>
               </form>
@@ -925,9 +932,9 @@ export function OutstandingPO() {
               {periods.length === 0 && !periodsLoading && (
                 <div className="py-12 text-center text-muted-foreground border rounded-lg bg-card">
                   <FileSpreadsheet className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
-                  <p className="text-base font-semibold">Belum ada periode</p>
+                  <p className="text-base font-semibold">{t('outstandingPo.noPeriods')}</p>
                   <p className="text-sm mt-1">
-                    Buat periode dulu (mis. September 2026), lalu upload data Outstanding PO ke periode itu.
+                    {t('outstandingPo.noPeriodsHint')}
                   </p>
                 </div>
               )}
@@ -943,11 +950,11 @@ export function OutstandingPO() {
                     </div>
                     <div className="min-w-0">
                       <h3 className="font-semibold text-foreground flex items-center gap-1.5">
-                        <span className="truncate">{p.label}</span>
+                        <span className="truncate">{periodDisplayLabel(p, lang)}</span>
                         {p.isLocked && <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
                       </h3>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {p.counts.OUTSTANDING_PO} Baris PO · {p.counts.MRP} baris MRP
+                        {t('outstandingPo.periodCounts', { po: p.counts.OUTSTANDING_PO, mrp: p.counts.MRP })}
                       </p>
                     </div>
                   </div>
@@ -955,7 +962,7 @@ export function OutstandingPO() {
 
                 <div className="p-5 border-2 border-dashed rounded-lg bg-card flex flex-col gap-3 justify-center">
                   <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                    <CalendarPlus className="w-4 h-4" /> Buat Periode Baru
+                    <CalendarPlus className="w-4 h-4" /> {t('outstandingPo.createNewPeriod')}
                   </div>
                   <input
                     type="month"
@@ -969,7 +976,7 @@ export function OutstandingPO() {
                     className="w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center gap-2"
                   >
                     {createPeriod.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                    Buat {newPeriodMonth ? monthLabel(newPeriodMonth) : 'Periode'}
+                    {t('components.createPeriod', { label: newPeriodMonth ? monthLabel(newPeriodMonth, lang) : t('components.periodLabel') })}
                   </button>
                 </div>
               </div>
@@ -981,34 +988,34 @@ export function OutstandingPO() {
                 <button 
                   onClick={() => setSelectedPeriodId(null)}
                   className="p-2 hover:bg-background rounded-md border text-muted-foreground hover:text-foreground transition-colors shrink-0"
-                  title="Kembali ke daftar periode"
+                  title={t('outstandingPo.backToPeriods')}
                 >
                   <ArrowLeft className="w-4 h-4" />
                 </button>
                 <div className="relative w-full sm:w-64">
                   <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground w-4 h-4" />
-                  <input type="text" placeholder={`Cari di ${selectedPeriod?.label ?? ''}...`} className="w-full pl-9 pr-4 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                  <input type="text" placeholder={t('outstandingPo.searchInPeriod', { period: selectedPeriod?.label ?? '' })} className="w-full pl-9 pr-4 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
                 </div>
                 <div className="flex items-center gap-1 bg-background border rounded-md p-0.5 text-xs text-muted-foreground">
-                  <button onClick={expandAll} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title="Buka Semua Detail">
-                    <ChevronsDown className="w-3.5 h-3.5" /> Buka
+                  <button onClick={expandAll} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title={t('outstandingPo.expandAll')}>
+                    <ChevronsDown className="w-3.5 h-3.5" /> {t('outstandingPo.expand')}
                   </button>
                   <span className="text-muted-foreground/30">|</span>
-                  <button onClick={collapseAll} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title="Tutup Semua Detail">
-                    <ChevronsUp className="w-3.5 h-3.5" /> Tutup
+                  <button onClick={collapseAll} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title={t('outstandingPo.collapseAll')}>
+                    <ChevronsUp className="w-3.5 h-3.5" /> {t('common.close')}
                   </button>
                 </div>
               </div>
               <div className="flex items-center gap-3">
                 {selectedIds.length > 0 && (
                   <button onClick={handleBulkDelete} disabled={bulkDeleteMutation.isPending} className="flex items-center gap-2 px-3 py-1.5 bg-destructive text-destructive-foreground hover:bg-destructive/90 rounded-md font-medium text-sm animate-in fade-in">
-                    {bulkDeleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />} Delete ({selectedIds.length})
+                    {bulkDeleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />} {t('outstandingPo.deleteCount', { count: selectedIds.length })}
                   </button>
                 )}
                 <div className="text-sm font-medium text-muted-foreground bg-background px-3 py-1.5 border rounded-md flex items-center gap-2">
-                  <span>{totalItems} Items</span>
+                  <span>{t('outstandingPo.itemsCount', { count: totalItems })}</span>
                   <span className="text-muted-foreground/40">•</span>
-                  <span>{totalPos} POs</span>
+                  <span>{t('outstandingPo.posCount', { count: totalPos })}</span>
                 </div>
               </div>
             </div>
@@ -1020,16 +1027,16 @@ export function OutstandingPO() {
                     <th className="px-4 py-4 w-12 text-center">
                       <input type="checkbox" className="rounded border-gray-300 w-4 h-4" checked={filteredRecords.length > 0 && selectedIds.length === filteredRecords.length} onChange={handleSelectAll} />
                     </th>
-                    <th className="px-6 py-4 font-semibold">Plan Date</th>
-                    <th className="px-6 py-4 font-semibold">PO Number</th>
-                    <th className="px-6 py-4 font-semibold">Supplier</th>
-                    <th className="px-6 py-4 font-semibold w-1/4">Item Desc</th>
-                    <th className="px-6 py-4 font-semibold">Ref-B</th>
-                    <th className="px-6 py-4 font-semibold text-right">Qty Order</th>
-                    <th className="px-6 py-4 font-semibold text-center">Unit</th>
-                    <th className="px-6 py-4 font-semibold text-right">Qty Delivered</th>
-                    <th className="px-6 py-4 font-semibold text-center">Unit</th>
-                    <th className="px-6 py-4 font-semibold text-right">Aksi</th>
+                    <th className="px-6 py-4 font-semibold">{t('outstandingPo.planDate')}</th>
+                    <th className="px-6 py-4 font-semibold">{t('outstandingPo.poNumber')}</th>
+                    <th className="px-6 py-4 font-semibold">{t('outstandingPo.supplier')}</th>
+                    <th className="px-6 py-4 font-semibold w-1/4">{t('outstandingPo.itemDesc')}</th>
+                    <th className="px-6 py-4 font-semibold">{t('outstandingPo.refBLabel')}</th>
+                    <th className="px-6 py-4 font-semibold text-right">{t('outstandingPo.qtyOrder')}</th>
+                    <th className="px-6 py-4 font-semibold text-center">{t('outstandingPo.unit')}</th>
+                    <th className="px-6 py-4 font-semibold text-right">{t('outstandingPo.qtyDelivered')}</th>
+                    <th className="px-6 py-4 font-semibold text-center">{t('outstandingPo.unit')}</th>
+                    <th className="px-6 py-4 font-semibold text-right">{t('common.actions')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -1037,14 +1044,14 @@ export function OutstandingPO() {
                     <tr>
                       <td colSpan={11} className="px-6 py-12 text-center text-muted-foreground">
                         <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" />
-                        <p className="mt-2 text-sm font-medium">Memuat data...</p>
+                        <p className="mt-2 text-sm font-medium">{t('common.loading')}</p>
                       </td>
                     </tr>
                   ) : groupedByItem.length === 0 ? (
                     <tr>
                       <td colSpan={11} className="px-6 py-12 text-center text-muted-foreground">
                         <FileSpreadsheet className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
-                        <p className="text-base font-semibold">Tidak ada data Outstanding PO</p>
+                        <p className="text-base font-semibold">{t('outstandingPo.noData')}</p>
                       </td>
                     </tr>
                   ) : (
@@ -1072,7 +1079,7 @@ export function OutstandingPO() {
                             <td className="px-6 py-3.5 text-muted-foreground text-xs font-medium whitespace-nowrap">
                               {group.planDateLabels.length === 1
                                 ? group.planDateLabels[0]
-                                : `${group.planDateLabels.length} Plan Dates`}
+                                : t('outstandingPo.planDatesCount', { count: group.planDateLabels.length })}
                             </td>
                             <td className="px-6 py-3.5"><PoNumberBadges numbers={group.poNumbers} /></td>
                             <td className="px-6 py-3.5 text-muted-foreground text-xs">{group.supplierNames || '-'}</td>
@@ -1081,7 +1088,7 @@ export function OutstandingPO() {
                                 <button
                                   onClick={() => toggleExpand(group.itemDesc)}
                                   className="p-1 hover:bg-muted/80 rounded transition-colors text-muted-foreground hover:text-foreground shrink-0"
-                                  title={isExpanded ? 'Tutup Detail' : 'Buka Detail'}
+                                  title={isExpanded ? t('outstandingPo.collapseDetail') : t('outstandingPo.expandDetail')}
                                 >
                                   {isExpanded ? (
                                     <ChevronDown className="w-4 h-4 text-primary" />
@@ -1093,7 +1100,7 @@ export function OutstandingPO() {
                                   {group.itemDesc}
                                 </span>
                                 <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-secondary text-secondary-foreground whitespace-nowrap">
-                                  {group.poNumbers.length} {group.poNumbers.length > 1 ? 'POs' : 'PO'}
+                                  {t('outstandingPo.posCount', { count: group.poNumbers.length })}
                                 </span>
                               </div>
                             </td>
@@ -1108,7 +1115,7 @@ export function OutstandingPO() {
                                 onClick={() => toggleExpand(group.itemDesc)}
                                 className="text-xs text-primary hover:text-primary/80 font-medium inline-flex items-center gap-1 p-1 hover:bg-primary/10 rounded transition-colors"
                               >
-                                {isExpanded ? 'Tutup' : 'Detail'}
+                                {isExpanded ? t('common.close') : t('common.detail')}
                                 {isExpanded ? <ChevronDown className="w-3.5 h-3.5" /> : <ChevronRight className="w-3.5 h-3.5" />}
                               </button>
                             </td>
@@ -1130,7 +1137,7 @@ export function OutstandingPO() {
                                   />
                                 </td>
                                 <td className="px-6 py-2.5 font-medium whitespace-nowrap text-xs text-foreground">
-                                  {safeFormatDate(record.planReceivedDate)}
+                                  {safeFormatDate(record.planReceivedDate, lang)}
                                 </td>
                                 {editingId === record.id ? (
                                   <>
@@ -1138,7 +1145,7 @@ export function OutstandingPO() {
                                       <input
                                         type="text"
                                         className="w-full h-8 px-2 border rounded text-xs bg-background font-mono"
-                                        placeholder="PO Number"
+                                        placeholder={t('outstandingPo.poNumber')}
                                         value={editForm.poNumber}
                                         onChange={(e) => setEditForm({ ...editForm, poNumber: e.target.value })}
                                       />
@@ -1163,7 +1170,7 @@ export function OutstandingPO() {
                                       <input
                                         type="text"
                                         className="w-full h-8 px-2 border rounded text-xs bg-background font-mono"
-                                        placeholder="Ref-B (mis. MTL/...)"
+                                        placeholder={t('outstandingPo.refBInputPlaceholder')}
                                         value={editForm.refB}
                                         onChange={(e) => setEditForm({ ...editForm, refB: e.target.value })}
                                       />
@@ -1183,9 +1190,9 @@ export function OutstandingPO() {
                                         value={editForm.qtyOrderUnit}
                                         onChange={(e) => setEditForm({ ...editForm, qtyOrderUnit: e.target.value })}
                                       >
-                                        <option value="kg">kg</option>
-                                        <option value="rim">rim</option>
-                                        <option value="sheets">sheets</option>
+                                        <option value="kg">{t('unit.kg')}</option>
+                                        <option value="rim">{t('unit.rim')}</option>
+                                        <option value="sheets">{t('unit.sheets')}</option>
                                       </select>
                                     </td>
                                     <td className="px-6 py-2.5">
@@ -1203,9 +1210,9 @@ export function OutstandingPO() {
                                         value={editForm.qtyDeliveredUnit}
                                         onChange={(e) => setEditForm({ ...editForm, qtyDeliveredUnit: e.target.value })}
                                       >
-                                        <option value="kg">kg</option>
-                                        <option value="rim">rim</option>
-                                        <option value="sheets">sheets</option>
+                                        <option value="kg">{t('unit.kg')}</option>
+                                        <option value="rim">{t('unit.rim')}</option>
+                                        <option value="sheets">{t('unit.sheets')}</option>
                                       </select>
                                     </td>
                                     <td className="px-6 py-2.5 text-right">
@@ -1241,7 +1248,7 @@ export function OutstandingPO() {
                                     </td>
                                     <td className="px-6 py-2.5"><RefBValue value={record.refB} /></td>
                                     <td className="px-6 py-2.5 text-right text-xs font-bold text-foreground tabular-nums">
-                                      {fmtQty(record.qtyOrder)}
+                                      {fmtQty(record.qtyOrder, lang)}
                                     </td>
                                     <td className="px-6 py-2.5 text-center text-xs text-muted-foreground">
                                       <span className="bg-secondary/60 text-secondary-foreground px-2 py-0.5 rounded text-[11px]">
@@ -1249,7 +1256,7 @@ export function OutstandingPO() {
                                       </span>
                                     </td>
                                     <td className="px-6 py-2.5 text-right text-xs font-bold text-foreground tabular-nums">
-                                      {fmtQty(record.qtyDelivered)}
+                                      {fmtQty(record.qtyDelivered, lang)}
                                     </td>
                                     <td className="px-6 py-2.5 text-center text-xs text-muted-foreground">
                                       <span className="bg-secondary/60 text-secondary-foreground px-2 py-0.5 rounded text-[11px]">
@@ -1261,7 +1268,7 @@ export function OutstandingPO() {
                                         <button
                                           onClick={() => handleEditClick(record)}
                                           className="p-1 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition-colors"
-                                          title="Edit PO"
+                                          title={t('outstandingPo.editPo')}
                                         >
                                           <Pencil className="w-3.5 h-3.5" />
                                         </button>
@@ -1269,7 +1276,7 @@ export function OutstandingPO() {
                                           onClick={() => handleDelete(record.id)}
                                           disabled={deleteMutation.isPending && deleteMutation.variables === record.id}
                                           className="p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
-                                          title="Hapus PO"
+                                          title={t('outstandingPo.deletePo')}
                                         >
                                           {deleteMutation.isPending && deleteMutation.variables === record.id ? (
                                             <Loader2 className="w-3.5 h-3.5 animate-spin text-destructive" />

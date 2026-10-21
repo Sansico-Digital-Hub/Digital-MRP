@@ -23,6 +23,8 @@ export interface PartNumberDetail {
   surplusKg: number | null;
   /** kg stok/PO yang benar-benar teralokasi ke part ini. */
   allocatedKg: number;
+  /** Bagian alokasi yang berasal dari STOK saja (bukan PO). */
+  allocatedStockKg?: number;
   /** Paper | PET | Flute | Lainnya. */
   materialType: string;
 }
@@ -49,6 +51,71 @@ export interface WeeklyMatrixRow {
   weeksSheet: number[];
 }
 
+/** Bentuk fisik lot stok: gulungan (kg/ton) atau lembaran. */
+export type StockForm = 'roll' | 'sheet' | 'mixed' | 'unknown';
+
+/** Rincian satu lot stok untuk dropdown baris `Stock As Of`. */
+export interface StockDetail {
+  desc: string;
+  supplier: string;
+  form: StockForm;
+  /** Total stok lot ini (satuan fisik aslinya). */
+  totalKg: number;
+  totalSheet: number;
+  /**
+   * Berapa potong ukuran grup yang dihasilkan satu satuan stok lot ini.
+   * `1` = ukuran sama; `2` = lebar stok 2× kebutuhan (mis. stok 117 × 92 cm
+   * dipakai untuk ukuran 58,5 × 92 cm), dst.
+   */
+  multiplier: number;
+  /** Lebar & panjang fisik lot stok (cm). */
+  sourceWidth: number | null;
+  sourceLength: number | null;
+  /** Stok lot ini dalam ukuran grup = `totalSheet × multiplier`. */
+  equivalentSheet: number;
+  /** Bagian yang terpakai grup ini (satuan ukuran grup). */
+  allocatedKg: number;
+  allocatedSheet: number;
+  /**
+   * Bagian lot ini yang DIKELUARKAN user dari ukuran ini — hanya pengecualian
+   * SEBAGIAN (satuan fisik lot). `0` = tidak ada.
+   */
+  excludedKg: number;
+  excludedSheet: number;
+  /** Identitas pool item (= `MaterialCalcExclusion.poolRef`). */
+  poolRef: string;
+  /** true = baris ini dikeluarkan user dari perhitungan ukuran ini. */
+  excluded?: boolean;
+  exclusionReason?: string | null;
+}
+
+/** Rincian satu baris PO untuk dropdown baris `Outstanding PO`. */
+export interface OutstandingPoDetail {
+  poNumber: string | null;
+  /** Identitas pool item (= `id` baris `outstanding_pos`). */
+  poolRef: string;
+  itemDesc: string;
+  supplier: string;
+  weekIndex: number;
+  planReceivedDate: string | null;
+  unit: string | null;
+  qtyKg: number;
+  qtySheet: number;
+  allocatedKg: number;
+  allocatedSheet: number;
+  remainingKg: number;
+  remainingSheet: number;
+  /**
+   * Bagian qty yang DIKELUARKAN user dari ukuran ini — hanya pengecualian
+   * SEBAGIAN (satuan fisik PO). Sisanya milik ukuran lain.
+   */
+  excludedKg: number;
+  excludedSheet: number;
+  /** true = PO ini dikeluarkan user dari perhitungan ukuran ini. */
+  excluded?: boolean;
+  exclusionReason?: string | null;
+}
+
 export interface WeeklyMatrixSummary {
   totalReq: number[];
   totalReqSheet: number[];
@@ -56,8 +123,12 @@ export interface WeeklyMatrixSummary {
   allowanceSheet: number[];
   totalPlusAllowance: number[];
   totalPlusAllowanceSheet: number[];
+  /** Stok raw material terpakai (kg) — TIDAK termasuk PO. */
   stockAsOf: number;
   stockAsOfSheet: number;
+  /** Rincian per lot stok (gulungan kg/ton vs lembaran). */
+  stockDetails?: StockDetail[];
+  /** Outstanding PO per minggu (qtyOrder − qtyDelivered), TIDAK dipotong alokasi. */
   outstandingPo: number[];
   outstandingPoSheet: number[];
   /**
@@ -65,6 +136,8 @@ export interface WeeklyMatrixSummary {
    * berisi beberapa nomor PO. Ditampilkan kecil di bawah angka kg.
    */
   outstandingPoNumbers: string[][];
+  /** Rincian tiap baris PO per minggu (sejajar `outstandingPo`). */
+  outstandingPoDetails?: OutstandingPoDetail[][];
   endInd: number[];
   endIndSheet: number[];
 }
@@ -79,6 +152,8 @@ export interface MaterialGroup {
   ukuran: string;
   gramatur: string;
   supplier: string;
+  /** `${ukuran}||${gramatur}||${supplier}` — hasil hitung LAMA belum punya ini. */
+  groupKey?: string;
   leadTimeMonths: number;
   planningTimeline?: {
     purchaseMonth: string;
@@ -545,6 +620,148 @@ export function usePatchCycleResult() {
       queryClient.invalidateQueries({ queryKey: ['material-planning-results'] });
       queryClient.invalidateQueries({ queryKey: ['material-planning-cycles'] });
     },
+  });
+}
+
+// ============================================================
+// PENGECUALIAN POOL PER UKURAN (material yang tidak ikut perhitungan)
+// ============================================================
+/**
+ * Permintaan user (2026-10-14): material yang muncul di rincian `Stock As Of` /
+ * `Outstanding PO` harus bisa dikeluarkan dari perhitungan SATU ukuran saja —
+ * mis. karena lot itu ukurannya hanya kelipatan, atau karena materialnya sudah
+ * dipakai ukuran lain.
+ *
+ * API otomatis MENGHITUNG ULANG periode setelah perubahan, jadi semua query
+ * perhitungan ikut di-invalidate.
+ */
+
+export type MaterialPoolKind = 'STOCK' | 'PO';
+
+export interface MaterialCalcExclusion {
+  id: string;
+  cycleId: string;
+  kind: MaterialPoolKind;
+  /** `${ukuran}||${gramatur}||${supplier}` — sama dengan `groupKey` engine. */
+  groupKey: string;
+  /** STOCK = `${itemDesc}||${supplier}`; PO = id baris `outstanding_pos`. */
+  poolRef: string;
+  groupLabel: string;
+  poolLabel: string;
+  /**
+   * Jumlah yang DIKELUARKAN dari ukuran ini — hanya pengecualian SEBAGIAN.
+   * `null` = seluruh pool item dikeluarkan.
+   */
+  qty: number | null;
+  /** Satuan `qty`: `kg` (bagian bersatuan kg) atau `sheet` (bagian lembar). */
+  unit: string | null;
+  reason: string | null;
+  createdBy: string | null;
+  createdAt: string;
+  updatedAt: string;
+}
+
+/** Satuan jumlah pada pengecualian sebagian. */
+export type PoolQtyUnit = 'kg' | 'sheet';
+
+/** Semua query yang angkanya berubah setelah pengecualian diubah. */
+function invalidateAfterPoolChange(queryClient: ReturnType<typeof useQueryClient>) {
+  for (const key of [
+    'material-planning-exclusions',
+    'material-planning-cycles',
+    'material-planning-results',
+    'material-planning-data-status',
+    'material-planning-audit',
+  ]) {
+    queryClient.invalidateQueries({ queryKey: [key] });
+  }
+  // CATATAN: `material-planning-result-detail` SENGAJA tidak di-invalidate.
+  // Perhitungan ulang MENGHAPUS run lama (isSaved = false), jadi memaksa ulang
+  // query itu hanya menghasilkan 404 untuk id yang sudah tidak ada. Kunci query
+  // hasil berganti sendiri karena id `currentResult` berubah.
+}
+
+export function useCycleExclusions(cycleId: string | null, enabled = true) {
+  return useQuery<{ data: MaterialCalcExclusion[] }, Error>({
+    queryKey: ['material-planning-exclusions', cycleId],
+    queryFn: () => fetchApi(`/material-planning/cycles/${cycleId}/exclusions`),
+    enabled: Boolean(cycleId) && enabled,
+    staleTime: 10 * 1000,
+  });
+}
+
+export function useCreatePoolExclusion() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    { data: { exclusions: MaterialCalcExclusion[]; runNumber: number | null; recalculated: boolean } },
+    Error,
+    {
+      cycleId: string;
+      kind: MaterialPoolKind;
+      groupKey: string;
+      /** Bisa lebih dari satu: satu nomor PO boleh berisi beberapa baris item. */
+      poolRefs: string[];
+      groupLabel: string;
+      poolLabel: string;
+      reason?: string;
+      /**
+       * Jumlah yang DIKELUARKAN dari ukuran ini — hanya pengecualian SEBAGIAN.
+       * Kosong/null = seluruh pool item dikeluarkan.
+       */
+      qty?: number | null;
+      /** Satuan `qty` (wajib diisi kalau `qty` diisi). */
+      unit?: PoolQtyUnit | null;
+    }
+  >({
+    mutationFn: ({ cycleId, ...body }) =>
+      fetchApi(`/material-planning/cycles/${cycleId}/exclusions`, {
+        method: 'POST',
+        body: JSON.stringify(body),
+      }),
+    onSuccess: () => invalidateAfterPoolChange(queryClient),
+  });
+}
+
+export function useUpdatePoolExclusion() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    { data: MaterialCalcExclusion; recalculated?: boolean; runNumber?: number | null },
+    Error,
+    {
+      cycleId: string;
+      exclusionId: string;
+      reason: string;
+      /**
+       * Jumlah yang DIKELUARKAN dari ukuran ini. Kirim `null` untuk kembali
+       * mengeluarkan seluruhnya. Kalau diisi, API MENGHITUNG ULANG periode.
+       */
+      qty?: number | null;
+      unit?: PoolQtyUnit | null;
+    }
+  >({
+    mutationFn: ({ cycleId, exclusionId, reason, qty, unit }) =>
+      fetchApi(`/material-planning/cycles/${cycleId}/exclusions/${exclusionId}`, {
+        method: 'PATCH',
+        body: JSON.stringify(qty === undefined ? { reason } : { reason, qty, unit: qty === null ? null : unit }),
+      }),
+    onSuccess: () => invalidateAfterPoolChange(queryClient),
+  });
+}
+
+/** Hapus pengecualian = material dipakai lagi untuk ukuran itu + hitung ulang. */
+export function useDeletePoolExclusion() {
+  const queryClient = useQueryClient();
+  return useMutation<
+    { data: { ids: string[]; deleted: number; recalculated: boolean; runNumber: number | null } },
+    Error,
+    { cycleId: string; exclusionIds: string[] }
+  >({
+    mutationFn: ({ cycleId, exclusionIds }) =>
+      fetchApi(
+        `/material-planning/cycles/${cycleId}/exclusions?ids=${encodeURIComponent(exclusionIds.join(','))}`,
+        { method: 'DELETE' },
+      ),
+    onSuccess: () => invalidateAfterPoolChange(queryClient),
   });
 }
 

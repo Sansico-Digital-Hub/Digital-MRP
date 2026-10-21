@@ -1,3 +1,4 @@
+/// <reference types="node" />
 /* eslint-disable no-console */
 /**
  * Verifikasi export PDF Material Calculation (satu PDF per folder jenis material).
@@ -10,7 +11,9 @@
  *   3. tidak ada teks yang melewati batas bawah area cetak (page-break benar;
  *      footer punya zona sendiri),
  *   4. isolasi jenis material: seluruh part dari kelompok ukuran jenis material A
- *      ada di PDF A, dan tidak satu pun part jenis material lain masuk ke PDF A.
+ *      ada di PDF A, dan tidak satu pun part jenis material lain masuk ke PDF A,
+ *   5. blok tanda tangan (Dibuat oleh / Diperiksa oleh / General Manager /
+ *      Plant Manager) muncul TEPAT SEKALI dan hanya di HALAMAN TERAKHIR.
  *
  * Pakai: pnpm --filter @pdits/api verify:pdf-export
  */
@@ -26,6 +29,9 @@ const PAGE_H = 595.28;
 const MARGIN_X = 22.7;
 /** Footer digambar di bawah area konten — batas bawah teks yang diizinkan. */
 const BOTTOM_LIMIT = PAGE_H - 10;
+
+/** Judul kolom blok tanda tangan (lang default = 'id'). */
+const SIGNATURE_LABELS = ['Dibuat oleh', 'Diperiksa oleh', 'General Manager', 'Plant Manager'];
 
 let failures = 0;
 function check(label: string, ok: boolean, detail = '') {
@@ -165,6 +171,25 @@ async function main() {
     const missing = ownParts.filter((partNumber) => !textSet.has(partNumber));
     check(`[${type}] seluruh ${ownParts.length} part ikut ter-export`, missing.length === 0, missing.slice(0, 3).join(', '));
 
+    // Baris part HANYA menampilkan lembar (satuan lbr/sheets), tanpa kg.
+    // Pastikan angka lembarnya benar-benar tercetak — ambil minggu yang nilainya
+    // signifikan supaya tidak lolos hanya karena semua nilainya "0".
+    // PDF mencetak lembar dengan 0 desimal, jadi bandingkan dengan pembulatan yang sama.
+    const numId = (v: number) =>
+      v.toLocaleString('id-ID', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
+    const partRows = typeGroups.flatMap((g) => g.weeklyMatrix?.rows ?? []);
+    const sheetMissing = partRows.filter(
+      (r) =>
+        (r.weeksSheet ?? []).some((sheetValue) => Math.abs(sheetValue) >= 1) &&
+        !(r.weeksSheet ?? []).some((sheetValue) => Math.abs(sheetValue) >= 1 && textSet.has(numId(sheetValue))),
+    );
+    check(
+      `[${type}] baris part menampilkan lembar (${partRows.length} baris)`,
+      sheetMissing.length === 0,
+      sheetMissing.slice(0, 3).map((r) => r.partNumber).join(', '),
+    );
+    check(`[${type}] satuan lembar & kg tercetak pada sel minggu`, textSet.has('lbr') && textSet.has('kg'));
+
     // …dan part jenis material LAIN tidak ikut masuk (tidak tercampur).
     const leaked: string[] = [];
     for (const [otherType, otherParts] of partsByType.entries()) {
@@ -172,6 +197,30 @@ async function main() {
       leaked.push(...otherParts.filter((partNumber) => textSet.has(partNumber)));
     }
     check(`[${type}] tidak ada part jenis material lain yang tercampur`, leaked.length === 0, leaked.slice(0, 3).join(', '));
+
+    // ── Blok tanda tangan: tepat sekali, di halaman terakhir ──
+    const lastPageTexts = new Set(parsedPages[parsedPages.length - 1].texts.map((t) => t.text));
+    const otherPagesTexts = new Set(parsedPages.slice(0, -1).flatMap((p) => p.texts.map((t) => t.text)));
+    const missingOnLastPage = SIGNATURE_LABELS.filter((label) => !lastPageTexts.has(label));
+    const leakedToOtherPages = SIGNATURE_LABELS.filter((label) => otherPagesTexts.has(label));
+    const countsWrong = SIGNATURE_LABELS.filter(
+      (label) => texts.filter((t) => t.text === label).length !== 1,
+    );
+    check(
+      `[${type}] blok tanda tangan ada di halaman terakhir (${SIGNATURE_LABELS.length} kolom)`,
+      missingOnLastPage.length === 0,
+      missingOnLastPage.join(', '),
+    );
+    check(
+      `[${type}] blok tanda tangan tidak muncul di halaman lain`,
+      leakedToOtherPages.length === 0,
+      leakedToOtherPages.join(', '),
+    );
+    check(
+      `[${type}] tiap kolom tanda tangan muncul tepat sekali`,
+      countsWrong.length === 0,
+      countsWrong.join(', '),
+    );
   }
 
   check('\ntidak ada teks melewati margin kiri', leftOverflow === 0, `${leftOverflow} potong`);

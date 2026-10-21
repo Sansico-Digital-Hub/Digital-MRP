@@ -5,6 +5,7 @@
  * dari Node; di sini hanya bagian unduh file.
  */
 import type { MaterialGroup } from '../hooks/useMaterialCalc';
+import { translate, type Lang } from '../i18n';
 import { buildMaterialTypePdf, isoDate, pdfFileName, type PdfExportMeta } from './materialCalcPdf';
 import { createZip } from './pdf/zipStore';
 
@@ -25,9 +26,10 @@ export function exportMaterialTypePdf(
   materialType: string,
   groups: MaterialGroup[],
   meta: PdfExportMeta = {},
+  lang: Lang = 'id',
 ): void {
   const exportedAt = meta.exportedAt ?? new Date();
-  const bytes = buildMaterialTypePdf(materialType, groups, { ...meta, exportedAt });
+  const bytes = buildMaterialTypePdf(materialType, groups, { ...meta, exportedAt }, lang);
   downloadBlob(bytes, pdfFileName(materialType, exportedAt), 'application/pdf');
 }
 
@@ -38,14 +40,20 @@ export function exportMaterialTypePdf(
 export function exportAllMaterialTypesZip(
   items: Array<{ materialType: string; groups: MaterialGroup[] }>,
   meta: PdfExportMeta = {},
+  lang: Lang = 'id',
 ): void {
   const exportedAt = meta.exportedAt ?? new Date();
   const entries = items
     .filter((item) => item.groups.length > 0)
     .map((item) => ({
       name: pdfFileName(item.materialType, exportedAt),
-      data: buildMaterialTypePdf(item.materialType, item.groups, { ...meta, exportedAt }),
+      data: buildMaterialTypePdf(item.materialType, item.groups, { ...meta, exportedAt }, lang),
     }));
   if (!entries.length) return;
-  downloadBlob(createZip(entries, exportedAt), `MaterialCalc_Semua_${isoDate(exportedAt)}.zip`, 'application/zip');
+  const zipName = `${translate(lang, 'materialCalc.export.allZipName')}`;
+  downloadBlob(
+    createZip(entries, exportedAt),
+    `MaterialCalc_${zipName}_${isoDate(exportedAt)}.zip`,
+    'application/zip',
+  );
 }

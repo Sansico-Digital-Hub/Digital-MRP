@@ -16,6 +16,7 @@ import {
   normalizeNpofText,
   parseMaterialNumber,
 } from './materialCalcEngine';
+import { canonicalSupplier } from './supplierAlias';
 
 export type NpofCoverageStatus = 'MISSING' | 'INCOMPLETE' | 'COMPLETE';
 
@@ -180,7 +181,9 @@ export function analyzeNpofCoverage(input: NpofCoverageInput): NpofCoverageResul
       npofId: npof.npofId,
       material: material || null,
       materialType: material ? getMaterialFamily(material) : null,
-      supplier: supplier || null,
+      // Ditampilkan dengan nama kanonik (HANCHANG / MEGA / XSD) supaya cocok
+      // dengan nama supplier di halaman Material Calculation.
+      supplier: supplier ? canonicalSupplier(supplier) : null,
       gramatur: gramatur || null,
       ukuran: ukuran || null,
       missingFields,

@@ -3,11 +3,12 @@ import { useWIPs, useUpsertWIP, useBulkUpsertWIP, useBulkDeleteWIP } from '../ho
 import { useItems, useCreateItem } from '../hooks/useItems';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { Settings2, Plus, Save, Upload, Trash2, Search, Filter, Calendar, X, Folder, ArrowLeft, Lock, CalendarPlus, Loader2 } from 'lucide-react';
-import { usePeriods, useCreatePeriod, monthLabel, MODULE_LABELS, type DataModule } from '../hooks/usePeriods';
+import { usePeriods, useCreatePeriod, monthLabel, periodDisplayLabel, type DataModule } from '../hooks/usePeriods';
 import { PeriodSelect } from '../components/PeriodSelect';
 import { ModuleSelect } from '../components/ModuleSelect';
 import * as XLSX from 'xlsx';
 import { useAuthStore, lockedDataModule } from '../stores/authStore';
+import { useTranslation } from '../i18n';
 
 const WIP_SHEET_LOCATIONS = ['Blister', 'UV', 'Varnish OPP', 'Die Cut'];
 
@@ -18,6 +19,7 @@ function getWipUnit(location: string): 'Sheet' | 'Pcs' {
 }
 
 export function WIP() {
+  const { t, lang, locale } = useTranslation();
   const { user, canEditDataModule } = useAuthStore();
   // Planner terkunci ke modulnya sendiri; Admin/Super Admin bebas memilih modul.
   const lockedModule = lockedDataModule(user?.role) as DataModule | null;
@@ -48,6 +50,10 @@ export function WIP() {
   // Gate edit: Admin/Super Admin selalu boleh; planner hanya untuk modulnya
   // sendiri; User/Viewer tidak boleh. (Nama variabel dipertahankan.)
   const isAdmin = canEditDataModule(moduleType);
+  // Label modul untuk ditampilkan (Production Planning / Material Planning).
+  const moduleLabel = moduleType === 'PRODUCTION'
+    ? t('layout.modules.production')
+    : t('layout.modules.material');
   const { data: wipData, isLoading: loadingWIP } = useWIPs(selectedPeriodId, moduleType);
 
   const handleCreatePeriod = async () => {
@@ -57,7 +63,7 @@ export function WIP() {
       setNewPeriodMonth('');
       setSelectedPeriodId(res.data.id);
     } catch (error: any) {
-      alert(error.message || 'Gagal membuat periode.');
+      alert(error.message || t('wip.errors.createPeriodFailed'));
     }
   };
   const { data: itemsData } = useItems();
@@ -209,7 +215,7 @@ export function WIP() {
         
         setImportData(parsedRecords);
       } catch (err) {
-        alert('Failed to parse file. Please make sure it is a valid Excel/CSV.');
+        alert(t('wip.errors.parseFileFailed'));
       }
     };
     reader.readAsBinaryString(file);
@@ -219,7 +225,7 @@ export function WIP() {
   const handleBulkSubmit = async (saveMode: 'overwrite' | 'add') => {
     if (importData.length === 0) return;
     if (!targetPeriodId) {
-      alert('Pilih periode dulu sebelum menyimpan data.');
+      alert(t('wip.errors.periodRequired'));
       return;
     }
     try {
@@ -232,7 +238,7 @@ export function WIP() {
       setShowImportModal(false);
       setImportData([]);
     } catch (err: any) {
-      alert(err.message || 'Failed to bulk import WIP');
+      alert(err.message || t('wip.errors.bulkImportFailed'));
     }
   };
 
@@ -240,12 +246,12 @@ export function WIP() {
 
   const handleDeleteSelected = async () => {
     if (selectedIds.length === 0) return;
-    if (!confirm(`Are you sure you want to delete ${selectedIds.length} selected records?`)) return;
+    if (!confirm(t('wip.confirm.deleteSelected', { count: selectedIds.length }))) return;
     try {
       await bulkDeleteWIP.mutateAsync({ ids: selectedIds });
       setSelectedIds([]);
     } catch (err: any) {
-      alert(err.message || 'Failed to delete records');
+      alert(err.message || t('wip.errors.deleteFailed'));
     }
   };
 
@@ -264,7 +270,7 @@ export function WIP() {
     e.preventDefault();
     if (!formData.itemId || !formData.location) return;
     if (!targetPeriodId) {
-      alert('Pilih periode dulu sebelum menyimpan data WIP.');
+      alert(t('wip.errors.periodRequiredSave'));
       return;
     }
 
@@ -281,7 +287,7 @@ export function WIP() {
       setShowForm(false);
       setFormData(prev => ({ ...prev, itemId: '', quantity: 0, progressPercent: 0, notes: '' }));
     } catch (err: any) {
-      alert(err.message || 'Failed to save WIP');
+      alert(err.message || t('wip.errors.saveFailed'));
     }
   };
 
@@ -289,8 +295,8 @@ export function WIP() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Work In Progress (WIP)</h2>
-          <p className="text-muted-foreground text-sm">Manage items currently in production stages.</p>
+          <h2 className="text-2xl font-bold tracking-tight">{t('wip.title')}</h2>
+          <p className="text-muted-foreground text-sm">{t('wip.subtitle')}</p>
         </div>        <div className="flex gap-2">
           {isAdmin && (
             <button 
@@ -298,7 +304,7 @@ export function WIP() {
               className="bg-secondary text-secondary-foreground border hover:bg-secondary/80 px-4 py-2 rounded-md font-medium text-sm flex items-center space-x-2"
             >
               <Upload size={16} />
-              <span>Import Data</span>
+              <span>{t('wip.importData')}</span>
             </button>
           )}
           {isAdmin && (
@@ -307,7 +313,7 @@ export function WIP() {
               className="bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 rounded-md font-medium text-sm flex items-center space-x-2"
             >
               <Plus size={16} />
-              <span>Update WIP Status</span>
+              <span>{t('wip.updateWipStatus')}</span>
             </button>
           )}
         </div>
@@ -323,9 +329,9 @@ export function WIP() {
       {showForm && (
         <div className="bg-card text-card-foreground border rounded-lg p-6 shadow-sm">
           <h3 className="font-semibold mb-4 flex items-center gap-2">
-            <Settings2 size={18} /> Update Work In Progress
+            <Settings2 size={18} /> {t('wip.form.title')}
           </h3>
-          <p className="text-xs text-muted-foreground mb-4">Note: Providing an update for the same Item + Location will OVERWRITE its current WIP data.</p>
+          <p className="text-xs text-muted-foreground mb-4">{t('wip.form.note')}</p>
           
           <form className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4 items-start">
             <ModuleSelect value={moduleType} onChange={setModuleType} className="lg:col-span-4" lockedTo={lockedModule} />
@@ -335,7 +341,7 @@ export function WIP() {
               className="lg:col-span-4"
             />
             <div className="space-y-2 lg:col-span-2">
-              <label className="text-sm font-medium">Part Number</label>
+              <label className="text-sm font-medium">{t('wip.fields.partNumber')}</label>
               <SearchableSelect
                 options={itemOptions}
                 value={formData.itemId}
@@ -347,14 +353,14 @@ export function WIP() {
                       setFormData(prev => ({...prev, itemId: res.data.id}));
                     }
                   } catch (e: any) {
-                    alert(e.message || "Failed to create part number");
+                    alert(e.message || t('wip.errors.createPartFailed'));
                   }
                 }}
-                placeholder="Select Part Number..."
+                placeholder={t('wip.placeholders.selectPartNumber')}
               />
             </div>
             <div className="space-y-2 lg:col-span-2">
-              <label className="text-sm font-medium">Location / Production Line</label>
+              <label className="text-sm font-medium">{t('wip.fields.locationLine')}</label>
               <SearchableSelect
                 options={locationOptions}
                 value={formData.location}
@@ -362,12 +368,12 @@ export function WIP() {
                 onAdd={(search) => {
                   setFormData(prev => ({...prev, location: search}));
                 }}
-                placeholder="Select Location..."
+                placeholder={t('wip.placeholders.selectLocation')}
               />
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium">Quantity</label>
+              <label className="text-sm font-medium">{t('common.quantity')}</label>
               <input 
                 type="number" required min="1"
                 className="w-full h-10 px-3 border rounded-md bg-background"
@@ -376,7 +382,7 @@ export function WIP() {
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium">Recorded Date</label>
+              <label className="text-sm font-medium">{t('wip.fields.recordedDate')}</label>
               <input 
                 type="date" required
                 className="w-full h-10 px-3 border rounded-md bg-background"
@@ -385,12 +391,12 @@ export function WIP() {
             </div>
 
             <div className="lg:col-span-4 flex justify-end gap-3 mt-2">
-              <button type="button" onClick={() => setShowForm(false)} className="h-10 border px-6 rounded-md font-medium hover:bg-muted">Cancel</button>
+              <button type="button" onClick={() => setShowForm(false)} className="h-10 border px-6 rounded-md font-medium hover:bg-muted">{t('common.cancel')}</button>
               <button type="button" onClick={(e) => handleSubmit(e, 'add')} disabled={upsertWIP.isPending || !targetPeriodId} className="h-10 bg-green-600 hover:bg-green-700 text-white px-6 rounded-md font-medium flex items-center gap-2 disabled:opacity-50">
-                <Plus size={16} /> {upsertWIP.isPending ? 'Saving...' : 'Save'}
+                <Plus size={16} /> {upsertWIP.isPending ? t('wip.saving') : t('common.save')}
               </button>
               <button type="button" onClick={(e) => handleSubmit(e, 'overwrite')} disabled={upsertWIP.isPending || !targetPeriodId} className="h-10 bg-primary text-primary-foreground px-6 rounded-md font-medium flex items-center gap-2 disabled:opacity-50">
-                <Save size={16} /> {upsertWIP.isPending ? 'Saving...' : 'Save Overwrite'}
+                <Save size={16} /> {upsertWIP.isPending ? t('wip.saving') : t('wip.saveOverwrite')}
               </button>
             </div>
           </form>
@@ -403,9 +409,9 @@ export function WIP() {
           {periods.length === 0 && !periodsLoading && (
             <div className="py-12 text-center text-muted-foreground border rounded-lg bg-card">
               <Settings2 className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
-              <p className="text-base font-semibold">Belum ada periode</p>
+              <p className="text-base font-semibold">{t('wip.noPeriods')}</p>
               <p className="text-sm mt-1">
-                Buat periode dulu (mis. September 2026), lalu upload data WIP ke periode itu.
+                {t('wip.noPeriodsHint')}
               </p>
             </div>
           )}
@@ -421,11 +427,11 @@ export function WIP() {
                 </div>
                 <div className="min-w-0">
                   <h3 className="font-semibold text-foreground flex items-center gap-1.5">
-                    <span className="truncate">{p.label}</span>
+                    <span className="truncate">{periodDisplayLabel(p, lang)}</span>
                     {p.isLocked && <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
                   </h3>
                   <p className="text-xs text-muted-foreground mt-0.5">
-                    {p.moduleCounts[moduleType].WIP} Baris WIP {MODULE_LABELS[moduleType]}
+                    {t('wip.periodCard.line', { count: p.moduleCounts[moduleType].WIP, module: moduleLabel })}
                   </p>
                 </div>
               </div>
@@ -433,7 +439,7 @@ export function WIP() {
 
             <div className="p-5 border-2 border-dashed rounded-lg bg-card flex flex-col gap-3 justify-center">
               <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                <CalendarPlus className="w-4 h-4" /> Buat Periode Baru
+                <CalendarPlus className="w-4 h-4" /> {t('wip.createPeriod')}
               </div>
               <input
                 type="month"
@@ -447,7 +453,7 @@ export function WIP() {
                 className="w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center gap-2"
               >
                 {createPeriod.isPending ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
-                Buat {newPeriodMonth ? monthLabel(newPeriodMonth) : 'Periode'}
+                {newPeriodMonth ? t('wip.createMonth', { month: monthLabel(newPeriodMonth, lang) }) : t('wip.createPeriodFallback')}
               </button>
             </div>
           </div>
@@ -458,11 +464,11 @@ export function WIP() {
             <button 
               onClick={() => setSelectedPeriodId(null)}
               className="p-2 hover:bg-background rounded-md border text-muted-foreground hover:text-foreground transition-colors shrink-0 bg-card"
-              title="Kembali ke daftar periode"
+              title={t('wip.backToPeriods')}
             >
               <ArrowLeft className="w-4 h-4" />
             </button>
-            <h3 className="font-semibold text-lg">{selectedPeriod?.label ?? 'Periode'} (WIP)</h3>
+            <h3 className="font-semibold text-lg">{t('wip.periodHeader', { period: selectedPeriod?.label ?? t('wip.periodFallback') })}</h3>
           </div>
           {/* Filters Bar */}
           <div className="bg-card text-card-foreground border rounded-lg p-4 shadow-sm flex flex-col md:flex-row gap-4 items-center animate-in fade-in slide-in-from-bottom-2">
@@ -473,7 +479,7 @@ export function WIP() {
             className="w-full md:w-auto h-10 px-4 flex items-center justify-center gap-2 border bg-red-600 text-white hover:bg-red-700 text-sm font-medium rounded-md transition-colors"
           >
             <Trash2 size={16} />
-            <span className="whitespace-nowrap">Delete Selected ({selectedIds.length})</span>
+            <span className="whitespace-nowrap">{t('wip.deleteSelected', { count: selectedIds.length })}</span>
           </button>
         )}
         {/* Search Input */}
@@ -481,7 +487,7 @@ export function WIP() {
           <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={18} />
           <input
             type="text"
-            placeholder="Search by Part Number or Name..."
+            placeholder={t('wip.placeholders.search')}
             className="w-full h-10 pl-10 pr-10 border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/20 focus:border-primary transition-all text-sm"
             value={searchQuery}
             onChange={(e) => setSearchQuery(e.target.value)}
@@ -506,7 +512,7 @@ export function WIP() {
             value={selectedLocation}
             onChange={(e) => setSelectedLocation(e.target.value)}
           >
-            <option value="">All Locations</option>
+            <option value="">{t('wip.allLocations')}</option>
             {activeLocations.map((loc) => (
               <option key={loc} value={loc}>
                 {loc}
@@ -550,7 +556,7 @@ export function WIP() {
             className="w-full md:w-auto h-10 px-4 flex items-center justify-center gap-2 border border-red-200 dark:border-red-950/50 bg-red-50/50 dark:bg-red-950/10 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/20 text-sm font-medium rounded-md transition-colors"
           >
             <X size={16} />
-            <span>Reset</span>
+            <span>{t('common.reset')}</span>
           </button>
         )}
       </div>
@@ -565,8 +571,8 @@ export function WIP() {
                     <input type="checkbox" checked={allFilteredSelected} onChange={handleSelectAll} className="rounded border-gray-300" />
                   </th>
                 )}
-                <th className="px-6 py-3 whitespace-nowrap">Part Number</th>
-                <th className="px-6 py-3 whitespace-nowrap">Recorded Date</th>
+                <th className="px-6 py-3 whitespace-nowrap">{t('wip.fields.partNumber')}</th>
+                <th className="px-6 py-3 whitespace-nowrap">{t('wip.fields.recordedDate')}</th>
                 {activeLocations.map(loc => (
                   <th key={loc} className="px-6 py-3 text-right whitespace-nowrap">
                     <div>{loc}</div>
@@ -575,20 +581,20 @@ export function WIP() {
                         ? 'bg-blue-100 text-blue-800 dark:bg-blue-900/40 dark:text-blue-300'
                         : 'bg-green-100 text-green-800 dark:bg-green-900/40 dark:text-green-300'
                     }`}>
-                      {getWipUnit(loc)}
+                      {getWipUnit(loc) === 'Sheet' ? t('unit.sheets') : t('unit.pcs')}
                     </span>
                   </th>
                 ))}
-                {isAdmin && <th className="px-6 py-3 text-center whitespace-nowrap">Actions</th>}
+                {isAdmin && <th className="px-6 py-3 text-center whitespace-nowrap">{t('common.actions')}</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {loadingWIP ? (
-                <tr><td colSpan={isAdmin ? activeLocations.length + 4 : activeLocations.length + 2} className="p-8 text-center">Loading WIP data...</td></tr>
+                <tr><td colSpan={isAdmin ? activeLocations.length + 4 : activeLocations.length + 2} className="p-8 text-center">{t('wip.loading')}</td></tr>
               ) : wips.length === 0 ? (
-                <tr><td colSpan={isAdmin ? activeLocations.length + 4 : activeLocations.length + 2} className="p-8 text-center text-muted-foreground">No active WIP recorded.</td></tr>
+                <tr><td colSpan={isAdmin ? activeLocations.length + 4 : activeLocations.length + 2} className="p-8 text-center text-muted-foreground">{t('wip.empty')}</td></tr>
               ) : groupedWips.length === 0 ? (
-                <tr><td colSpan={isAdmin ? activeLocations.length + 4 : activeLocations.length + 2} className="p-8 text-center text-muted-foreground">No matching WIP records found for current filters.</td></tr>
+                <tr><td colSpan={isAdmin ? activeLocations.length + 4 : activeLocations.length + 2} className="p-8 text-center text-muted-foreground">{t('wip.emptyFiltered')}</td></tr>
               ) : (
                 groupedWips.map((group: any) => (
                   <tr key={group.id} className="hover:bg-muted/50 transition-colors">
@@ -610,7 +616,7 @@ export function WIP() {
                       </td>
                     )}
                     <td className="px-6 py-4 font-medium whitespace-nowrap">{group.itemCode}</td>
-                    <td className="px-6 py-4 whitespace-nowrap text-muted-foreground">{group.recordedDate ? new Date(group.recordedDate).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}</td>
+                    <td className="px-6 py-4 whitespace-nowrap text-muted-foreground">{group.recordedDate ? new Date(group.recordedDate).toLocaleDateString(locale, { day: '2-digit', month: 'short', year: 'numeric' }) : '-'}</td>
                     {activeLocations.map(loc => (
                       <td key={loc} className="px-6 py-4 text-right font-medium">
                         {group.locations[loc]?.quantity > 0 ? (
@@ -625,11 +631,11 @@ export function WIP() {
                         <div className="flex items-center justify-center gap-2">
                           <button
                             onClick={() => {
-                               if (!confirm('Are you sure you want to delete all WIP records for this Part Number?')) return;
-                               bulkDeleteWIP.mutateAsync({ ids: group.ids }).catch(err => alert(err.message || 'Failed to delete'));
+                               if (!confirm(t('wip.confirm.deletePart'))) return;
+                               bulkDeleteWIP.mutateAsync({ ids: group.ids }).catch(err => alert(err.message || t('wip.errors.deleteFailed')));
                             }}
                             className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950 rounded-md transition-colors"
-                            title="Delete All WIP for this Part Number"
+                            title={t('wip.deletePartTooltip')}
                           >
                             <Trash2 size={16} />
                           </button>
@@ -650,7 +656,7 @@ export function WIP() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
           <div className="bg-card text-card-foreground border rounded-lg shadow-lg max-w-5xl w-full max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-center p-6 border-b">
-              <h3 className="text-xl font-bold flex items-center gap-2"><Upload size={20} /> Import WIP Data</h3>
+              <h3 className="text-xl font-bold flex items-center gap-2"><Upload size={20} /> {t('wip.importModal.title')}</h3>
               <button onClick={() => setShowImportModal(false)} className="text-muted-foreground hover:text-foreground">✕</button>
             </div>
             
@@ -671,12 +677,12 @@ export function WIP() {
               {importData.length > 0 && (
                 <>
                   <div className="flex justify-between items-center bg-muted/30 p-3 rounded-md">
-                    <span className="font-medium text-sm">{importData.length} records loaded</span>
+                    <span className="font-medium text-sm">{t('wip.importModal.recordsLoaded', { count: importData.length })}</span>
                     <div className="relative w-64">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
                       <input 
                         type="text" 
-                        placeholder="Search loaded data..." 
+                        placeholder={t('wip.placeholders.searchLoaded')} 
                         className="w-full h-9 pl-9 pr-4 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/20"
                         value={importSearch}
                         onChange={e => setImportSearch(e.target.value)}
@@ -688,10 +694,10 @@ export function WIP() {
                     <table className="w-full text-sm text-left">
                       <thead className="bg-muted text-muted-foreground text-xs uppercase font-medium sticky top-0 shadow-sm">
                         <tr>
-                          <th className="px-4 py-3">Part Number</th>
-                          <th className="px-4 py-3">Location / Line</th>
-                          <th className="px-4 py-3 text-right">Quantity</th>
-                          <th className="px-4 py-3 text-center w-20">Action</th>
+                          <th className="px-4 py-3">{t('wip.fields.partNumber')}</th>
+                          <th className="px-4 py-3">{t('wip.fields.locationLineShort')}</th>
+                          <th className="px-4 py-3 text-right">{t('common.quantity')}</th>
+                          <th className="px-4 py-3 text-center w-20">{t('common.action')}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border">
@@ -715,7 +721,8 @@ export function WIP() {
                             <td className="px-4 py-2 text-center">
                               <button 
                                 onClick={() => setImportData(importData.filter(r => r.id !== row.id))}
-                                className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950 rounded-md transition-colors title='Delete Record'"
+                                className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950 rounded-md transition-colors"
+                                title={t('common.delete')}
                               >
                                 <Trash2 size={16} />
                               </button>
@@ -734,21 +741,21 @@ export function WIP() {
                 onClick={() => setShowImportModal(false)}
                 className="h-10 border px-6 rounded-md font-medium hover:bg-muted text-sm"
               >
-                Cancel
+                {t('common.cancel')}
               </button>
               <button 
                 onClick={() => handleBulkSubmit('add')}
                 disabled={bulkUpsertWIP.isPending || importData.length === 0 || !targetPeriodId}
                 className="h-10 bg-green-600 hover:bg-green-700 text-white px-6 rounded-md font-medium flex items-center gap-2 disabled:opacity-50 text-sm"
               >
-                <Plus size={16} /> {bulkUpsertWIP.isPending ? 'Saving...' : 'Save (Add)'}
+                <Plus size={16} /> {bulkUpsertWIP.isPending ? t('wip.saving') : t('wip.saveAdd')}
               </button>
               <button 
                 onClick={() => handleBulkSubmit('overwrite')}
                 disabled={bulkUpsertWIP.isPending || importData.length === 0 || !targetPeriodId}
                 className="h-10 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white px-6 rounded-md font-medium flex items-center gap-2 disabled:opacity-50 text-sm"
               >
-                <Save size={16} /> {bulkUpsertWIP.isPending ? 'Saving...' : 'Save Overwrite'}
+                <Save size={16} /> {bulkUpsertWIP.isPending ? t('wip.saving') : t('wip.saveOverwrite')}
               </button>
             </div>
           </div>

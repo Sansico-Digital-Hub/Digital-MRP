@@ -65,11 +65,15 @@ export const config = {
     // 1 rim dihitung 500 lembar. Dipakai untuk Outstanding PO bersatuan "rim".
     sheetsPerRim: parseInt(process.env.SHEETS_PER_RIM || '500', 10),
     // Apakah supplier harus sama agar stok/PO dianggap cocok.
-    // false (default) = hanya gramatur + ukuran yang menentukan. Ini yang sesuai
-    //   dengan hasil validasi "29 dari 98 part" pada rancangan.
-    // true = hasil turun menjadi 13 part, karena supplier di NPOF berupa nama
-    //   panjang ("Hanchang Paper") sedangkan di stok berupa kode ("HANCHANG").
-    requireSupplierMatch: (process.env.MATERIAL_REQUIRE_SUPPLIER || 'false').toLowerCase() === 'true',
+    // true (DEFAULT sejak 2026-10-15) = pencocokan memakai Item Desc + Supplier,
+    //   sesuai spesifikasi §2 (NPOF dihubungkan ke Stock Raw Material dan
+    //   Outstanding PO lewat Item Desc + Supplier). Nama supplier dibandingkan
+    //   setelah normalisasi `supplierAlias.ts`, jadi "PHIL CORPORATION" tetap
+    //   terbaca sebagai HANCHANG dan "PT. MEGA SURYA ERATAMA" sebagai MEGA.
+    //   Sebelum ini supplier tidak diperiksa, sehingga gulungan 450gsm/120cm
+    //   milik MEGA ikut dipakai di ukuran `120 x 85.5 CM` milik HANCHANG.
+    // false = kembali ke perilaku lama (hanya gramatur + ukuran yang menentukan).
+    requireSupplierMatch: (process.env.MATERIAL_REQUIRE_SUPPLIER || 'true').toLowerCase() === 'true',
   },
 };
 

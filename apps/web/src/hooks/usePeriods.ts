@@ -1,5 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
 import { fetchApi } from '../lib/api';
+import { localeCode, type Lang } from '../i18n';
 
 /**
  * Periode upload (PlanningCycle) untuk halaman Master Data.
@@ -48,11 +49,51 @@ export function usePeriods() {
   });
 }
 
-/** "2026-09" -> "September 2026" (dipakai untuk pratinjau sebelum periode dibuat). */
-export function monthLabel(month: string): string {
+/**
+ * "2026-09" -> "September 2026" (dipakai untuk pratinjau sebelum periode dibuat).
+ * Bahasa default `id` supaya pemanggil lama tetap kompilasi.
+ */
+export function monthLabel(month: string, lang: Lang = 'id'): string {
   const [year, m] = month.split('-');
   const date = new Date(Number(year), Number(m) - 1, 1);
-  return date.toLocaleDateString('id-ID', { month: 'long', year: 'numeric' });
+  return date.toLocaleDateString(localeCode(lang), { month: 'long', year: 'numeric' });
+}
+
+/** Nama bulan Bahasa Indonesia, dipakai backend saat membuat label otomatis. */
+const MONTH_NAMES_ID = [
+  'Januari',
+  'Februari',
+  'Maret',
+  'April',
+  'Mei',
+  'Juni',
+  'Juli',
+  'Agustus',
+  'September',
+  'Oktober',
+  'November',
+  'Desember',
+];
+
+/**
+ * Label periode siap tampil, mengikuti bahasa yang sedang aktif.
+ *
+ * `PlanningCycle.label` dibuat OTOMATIS oleh backend dalam Bahasa Indonesia
+ * (mis. "Oktober 2026"). Supaya ikut bahasa aktif, label diturunkan ulang dari
+ * `uploadMonth`. Kalau user mengisi label sendiri (bukan pola otomatis), label
+ * aslinya dikembalikan apa adanya.
+ */
+export function periodDisplayLabel(
+  period: { label: string; uploadMonth: string },
+  lang: Lang = 'id',
+): string {
+  const [year, month] = period.uploadMonth.split('-');
+  const monthName = MONTH_NAMES_ID[Number(month) - 1];
+  const autoLabel = year && monthName ? `${monthName} ${year}` : null;
+
+  return autoLabel && autoLabel === period.label
+    ? monthLabel(period.uploadMonth, lang)
+    : period.label;
 }
 
 /**

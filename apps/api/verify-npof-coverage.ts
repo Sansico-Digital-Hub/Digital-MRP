@@ -228,7 +228,9 @@ async function main() {
     check('3b. Field kurang hanya gramatur + formula', rowPartial?.missingFields, ['gramatur', 'formula']);
     check('3c. Part NPOF kurang tetap kritikal (formula kosong)', rowPartial?.critical, true);
     check('3d. Jenis material ikut dilaporkan', rowPartial?.materialType, 'Paper');
-    check('3e. Supplier ikut dilaporkan', rowPartial?.supplier, 'MEGA PAPER');
+    // Sejak normalisasi supplier (2026-10-13) nama yang dilaporkan adalah nama
+    // KANONIK: "MEGA PAPER" -> "MEGA" (lihat supplierAlias.ts).
+    check('3e. Supplier dilaporkan dengan nama kanonik', rowPartial?.supplier, 'MEGA');
     check('3f. npofId asli dilaporkan', rowPartial?.npofId, TEST_NPOF_IDS[1]);
 
     check(

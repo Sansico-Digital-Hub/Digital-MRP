@@ -1,6 +1,7 @@
 import { Factory, Package } from 'lucide-react';
 import { cn } from '../lib/utils';
 import type { DataModule } from '../hooks/usePeriods';
+import { useTranslation } from '../i18n';
 
 /**
  * Pemilih modul pemilik data untuk tabel yang DIPAKAI BERSAMA secara tampilan:
@@ -26,16 +27,17 @@ export function ModuleSelect({
    */
   lockedTo?: DataModule | null;
 }) {
+  const { t } = useTranslation();
   const options: { id: DataModule; label: string; icon: typeof Factory; activeClass: string }[] = [
     {
       id: 'PRODUCTION',
-      label: 'Production Planning',
+      label: t('layout.modules.production'),
       icon: Factory,
       activeClass: 'bg-emerald-600 text-white border-emerald-600',
     },
     {
       id: 'MATERIAL',
-      label: 'Material Planning',
+      label: t('layout.modules.material'),
       icon: Package,
       activeClass: 'bg-amber-600 text-white border-amber-600',
     },
@@ -51,7 +53,7 @@ export function ModuleSelect({
       )}
     >
       <span className="text-xs font-semibold uppercase tracking-wider text-muted-foreground px-1">
-        Data untuk modul
+        {t('components.moduleFor')}
       </span>
       <div className="flex gap-1">
         {options.map((opt) => {
@@ -64,7 +66,7 @@ export function ModuleSelect({
               type="button"
               onClick={() => !isDisabled && !isLocked && onChange(opt.id)}
               disabled={isDisabled}
-              title={isDisabled ? 'Role Anda tidak punya akses ke modul ini' : undefined}
+              title={isDisabled ? t('components.moduleNoAccess') : undefined}
               className={cn(
                 'flex items-center gap-1.5 px-3 py-1.5 rounded-md text-sm font-medium border transition-colors',
                 isActive

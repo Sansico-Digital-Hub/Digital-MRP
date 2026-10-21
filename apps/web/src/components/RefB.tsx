@@ -5,6 +5,7 @@
  * `Ref_B_PO` (Stock Raw Material), dan disimpan ke satu field seragam `refB`.
  * Hanya baris yang nilainya mengandung "MTL" yang masuk ke sistem.
  */
+import { useTranslation } from '../i18n';
 
 /**
  * Cermin dari `matchesMtl()` di API (`apps/api/src/lib/excelRef.ts`).
@@ -23,6 +24,7 @@ export const REF_B_MTL_MESSAGE = 'Kolom Ref-B wajib diisi dan harus mengandung "
 
 /** Referensi customer pada baris grup (maks 2 badge, sisanya "+N lagi"). */
 export function RefBSummary({ refs }: { refs: string[] }) {
+  const { t } = useTranslation();
   if (refs.length === 0) return <span className="text-muted-foreground text-xs">—</span>;
   const shown = refs.slice(0, 2);
   return (
@@ -37,7 +39,7 @@ export function RefBSummary({ refs }: { refs: string[] }) {
       ))}
       {refs.length > shown.length && (
         <span className="text-[11px] font-semibold text-muted-foreground self-center">
-          +{refs.length - shown.length} lagi
+          {t('components.refBMore', { count: refs.length - shown.length })}
         </span>
       )}
     </div>

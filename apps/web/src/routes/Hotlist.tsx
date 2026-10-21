@@ -1,11 +1,13 @@
 import { useEffect, useState, useRef } from 'react';
 import { useHotlist, useUploadHotlist, useAddManualHotlist, useUpdateHotlist, useDeleteHotlist, useBulkDeleteHotlist, useImportHotlist, type HotlistData } from '../hooks/useHotlist';
-import { usePeriods, useCreatePeriod, monthLabel } from '../hooks/usePeriods';
+import { usePeriods, useCreatePeriod, monthLabel, periodDisplayLabel } from '../hooks/usePeriods';
 import { PeriodSelect } from '../components/PeriodSelect';
 import { FileSpreadsheet, Plus, Upload, Loader2, Search, Pencil, Trash2, X, Check, Save, Folder, ArrowLeft, CalendarPlus, Lock } from 'lucide-react';
 import { format } from 'date-fns';
+import { useTranslation } from '../i18n';
 
 export function Hotlist() {
+  const { t, lang, locale, dateLocale } = useTranslation();
   // Periode = keranjang data. WAJIB dipilih sebelum upload/isi manual.
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
   // Periode tujuan untuk Import Excel / Isi Manual. Ikut periode yang sedang
@@ -64,14 +66,14 @@ export function Hotlist() {
         if (res.data && res.data.length > 0) {
           setPreviewData(res.data);
         } else {
-          alert('No valid data found in file.');
+          alert(t('hotlist.errors.noValidData'));
         }
         if (fileInputRef.current) {
           fileInputRef.current.value = '';
         }
       },
       onError: (error: any) => {
-        alert(`Failed to upload file: ${error.message}`);
+        alert(t('hotlist.errors.uploadFailed', { message: error.message }));
         if (fileInputRef.current) {
           fileInputRef.current.value = '';
         }
@@ -86,37 +88,41 @@ export function Hotlist() {
       setNewPeriodMonth('');
       setSelectedPeriodId(res.data.id);
     } catch (error: any) {
-      alert(error.message || 'Gagal membuat periode.');
+      alert(error.message || t('hotlist.errors.createPeriodFailed'));
     }
   };
 
   const handleSaveImport = (mode: 'add' | 'overwrite') => {
     if (previewData.length === 0) return;
     if (!targetPeriodId) {
-      alert('Pilih periode dulu sebelum menyimpan data.');
+      alert(t('hotlist.errors.selectPeriodFirst'));
       return;
     }
 
-    let confirmMsg = `Tambahkan ${previewData.length} baris ke periode "${selectedPeriod?.label}"?`;
+    let confirmMsg = t('hotlist.import.addConfirm', {
+      count: previewData.length,
+      label: selectedPeriod?.label ?? '',
+    });
     if (mode === 'overwrite') {
       const existing = selectedPeriod?.counts.HOTLIST ?? 0;
-      confirmMsg =
-        `PERHATIAN: seluruh data HOTLIST di periode "${selectedPeriod?.label}" (${existing} baris) ` +
-        `akan DIGANTI dengan ${previewData.length} baris dari file ini.\n\n` +
-        'Periode lain tidak terpengaruh. Lanjutkan?';
+      confirmMsg = t('hotlist.import.overwriteConfirm', {
+        label: selectedPeriod?.label ?? '',
+        existing,
+        count: previewData.length,
+      });
     }
 
     if (!window.confirm(confirmMsg)) return;
 
     importMutation.mutate({ data: previewData, mode, periodId: targetPeriodId }, {
       onSuccess: () => {
-        alert('Data imported successfully!');
+        alert(t('hotlist.import.success'));
         setPreviewData([]);
         setPreviewSearchTerm('');
         setPreviewEditingIndex(null);
       },
       onError: (error: any) => {
-        alert(`Failed to import data: ${error.message}`);
+        alert(t('hotlist.errors.importFailed', { message: error.message }));
       }
     });
   };
@@ -132,7 +138,7 @@ export function Hotlist() {
 
   const handlePreviewSaveEdit = (index: number) => {
     if (!previewEditForm.partNumber || !previewEditForm.date || !previewEditForm.biTotal) {
-      alert('Please fill all required fields');
+      alert(t('hotlist.errors.fillAllRequired'));
       return;
     }
     const updatedData = [...previewData];
@@ -147,7 +153,7 @@ export function Hotlist() {
   };
 
   const handlePreviewDelete = (index: number) => {
-    if (window.confirm('Are you sure you want to remove this record from the preview?')) {
+    if (window.confirm(t('hotlist.confirm.removePreview'))) {
       const updatedData = [...previewData];
       updatedData.splice(index, 1);
       setPreviewData(updatedData);
@@ -158,12 +164,12 @@ export function Hotlist() {
   const handleManualSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!manualForm.partNumber || !manualForm.date || !manualForm.biTotal) {
-      alert('Please fill all fields');
+      alert(t('hotlist.errors.fillAllFields'));
       return;
     }
 
     if (!targetPeriodId) {
-      alert('Pilih periode dulu sebelum menambah data manual.');
+      alert(t('hotlist.errors.selectPeriodManual'));
       return;
     }
 
@@ -182,7 +188,7 @@ export function Hotlist() {
         setIsManualOpen(false);
       },
       onError: (error: any) => {
-        alert(`Failed to add record: ${error.message}`);
+        alert(t('hotlist.errors.addFailed', { message: error.message }));
       }
     });
   };
@@ -198,7 +204,7 @@ export function Hotlist() {
 
   const handleSaveEdit = (id: string) => {
     if (!editForm.partNumber || !editForm.date || !editForm.biTotal) {
-      alert('Please fill all fields');
+      alert(t('hotlist.errors.fillAllFields'));
       return;
     }
 
@@ -214,16 +220,16 @@ export function Hotlist() {
         setEditingId(null);
       },
       onError: (error: any) => {
-        alert(`Failed to update record: ${error.message}`);
+        alert(t('hotlist.errors.updateFailed', { message: error.message }));
       }
     });
   };
 
   const handleDelete = (id: string) => {
-    if (window.confirm('Are you sure you want to delete this record?')) {
+    if (window.confirm(t('hotlist.confirm.deleteOne'))) {
       deleteMutation.mutate(id, {
         onError: (error: any) => {
-          alert(`Failed to delete record: ${error.message}`);
+          alert(t('hotlist.errors.deleteFailed', { message: error.message }));
         }
       });
     }
@@ -247,13 +253,13 @@ export function Hotlist() {
 
   const handleBulkDelete = () => {
     if (selectedIds.length === 0) return;
-    if (window.confirm(`Are you sure you want to delete ${selectedIds.length} records?`)) {
+    if (window.confirm(t('hotlist.confirm.deleteMany', { count: selectedIds.length }))) {
       bulkDeleteMutation.mutate(selectedIds, {
         onSuccess: () => {
           setSelectedIds([]);
         },
         onError: (error: any) => {
-          alert(`Failed to delete records: ${error.message}`);
+          alert(t('hotlist.errors.bulkDeleteFailed', { message: error.message }));
         }
       });
     }
@@ -276,7 +282,7 @@ export function Hotlist() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">HOTLIST</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            Manage hotlist data for items. Upload from Excel or add manually.
+            {t('hotlist.subtitle')}
           </p>
         </div>
         
@@ -298,7 +304,7 @@ export function Hotlist() {
             ) : (
               <Upload className="w-4 h-4" />
             )}
-            Upload Excel
+            {t('hotlist.uploadExcel')}
           </button>
           
           <button
@@ -307,7 +313,7 @@ export function Hotlist() {
             className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md font-medium text-sm transition-colors"
           >
             <Plus className="w-4 h-4" />
-            Isi Manual
+            {t('hotlist.manualEntry')}
           </button>
         </div>
       </div>
@@ -318,16 +324,16 @@ export function Hotlist() {
             <div>
               <h2 className="text-lg font-bold text-primary flex items-center gap-2">
                 <FileSpreadsheet className="w-5 h-5" />
-                Data Preview
+                {t('hotlist.preview.title')}
               </h2>
               <p className="text-sm text-muted-foreground mt-1">
-                You are about to import <strong>{previewData.length}</strong> records. Please review the data below and choose how to save.
+                {t('hotlist.preview.aboutPrefix')} <strong>{previewData.length}</strong> {t('hotlist.preview.aboutSuffix')}
               </p>
             </div>
             <div className="flex flex-wrap gap-2 items-center">
               <div className="relative w-full sm:w-64 mr-2">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground w-4 h-4" />
-                <input type="text" placeholder="Search preview..." className="w-full pl-9 pr-4 py-1.5 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary" value={previewSearchTerm} onChange={(e) => setPreviewSearchTerm(e.target.value)} />
+                <input type="text" placeholder={t('hotlist.preview.searchPlaceholder')} className="w-full pl-9 pr-4 py-1.5 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary" value={previewSearchTerm} onChange={(e) => setPreviewSearchTerm(e.target.value)} />
               </div>
               <button
                 onClick={() => handleSaveImport('add')}
@@ -335,7 +341,7 @@ export function Hotlist() {
                 className="flex items-center gap-2 px-4 py-2 bg-blue-600 text-white hover:bg-blue-700 rounded-md font-medium text-sm transition-colors disabled:opacity-50"
               >
                 {importMutation.isPending && importMutation.variables?.mode === 'add' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                Save (Add)
+                {t('hotlist.preview.saveAdd')}
               </button>
               <button
                 onClick={() => handleSaveImport('overwrite')}
@@ -343,7 +349,7 @@ export function Hotlist() {
                 className="flex items-center gap-2 px-4 py-2 bg-red-600 text-white hover:bg-red-700 rounded-md font-medium text-sm transition-colors disabled:opacity-50"
               >
                 {importMutation.isPending && importMutation.variables?.mode === 'overwrite' ? <Loader2 className="w-4 h-4 animate-spin" /> : <Save className="w-4 h-4" />}
-                Save (Overwrite)
+                {t('hotlist.preview.saveOverwrite')}
               </button>
               <button
                 onClick={() => setPreviewData([])}
@@ -351,7 +357,7 @@ export function Hotlist() {
                 className="flex items-center gap-2 px-4 py-2 bg-muted text-muted-foreground hover:bg-muted/80 rounded-md font-medium text-sm transition-colors"
               >
                 <X className="w-4 h-4" />
-                Cancel
+                {t('common.cancel')}
               </button>
             </div>
           </div>
@@ -362,15 +368,15 @@ export function Hotlist() {
             <table className="w-full text-sm text-left">
               <thead className="text-xs text-muted-foreground uppercase bg-secondary/50 sticky top-0 z-10 shadow-sm">
                 <tr>
-                  <th className="px-6 py-4 font-semibold w-1/3">Part Number</th>
-                  <th className="px-6 py-4 font-semibold">Date</th>
-                  <th className="px-6 py-4 font-semibold">BI Total</th>
-                  <th className="px-6 py-4 font-semibold text-right">Aksi</th>
+                  <th className="px-6 py-4 font-semibold w-1/3">{t('hotlist.table.partNumber')}</th>
+                  <th className="px-6 py-4 font-semibold">{t('common.date')}</th>
+                  <th className="px-6 py-4 font-semibold">{t('hotlist.table.biTotal')}</th>
+                  <th className="px-6 py-4 font-semibold text-right">{t('common.actions')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y">
                 {filteredPreviewData.length === 0 ? (
-                   <tr><td colSpan={4} className="px-6 py-8 text-center text-muted-foreground">No matching data found in preview.</td></tr>
+                   <tr><td colSpan={4} className="px-6 py-8 text-center text-muted-foreground">{t('hotlist.preview.noData')}</td></tr>
                 ) : filteredPreviewData.map((record) => {
                   const originalIndex = previewData.indexOf(record);
                   return (
@@ -403,10 +409,10 @@ export function Hotlist() {
                             </span>
                           </td>
                           <td className="px-6 py-3 font-medium">
-                            {format(new Date(record.date), 'dd MMM yyyy')}
+                            {format(new Date(record.date), 'dd MMM yyyy', { locale: dateLocale })}
                           </td>
                           <td className="px-6 py-3">
-                            <span className="font-bold">{record.biTotal.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 2 })}</span>
+                            <span className="font-bold">{record.biTotal.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 2 })}</span>
                           </td>
                           <td className="px-6 py-3 text-right">
                             <div className="flex items-center justify-end gap-1">
@@ -430,7 +436,7 @@ export function Hotlist() {
           {/* Manual Entry Form */}
           {isManualOpen && (
             <div className="bg-card border rounded-lg p-5 shadow-sm animate-in slide-in-from-top-2">
-              <h2 className="text-sm font-semibold mb-4">Input Hotlist Manual</h2>
+              <h2 className="text-sm font-semibold mb-4">{t('hotlist.manual.title')}</h2>
               <form onSubmit={handleManualSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
                 <PeriodSelect
                   value={targetPeriodId}
@@ -438,18 +444,18 @@ export function Hotlist() {
                   className="md:col-span-4"
                 />
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Part Number</label>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('hotlist.table.partNumber')}</label>
                   <input
                     type="text"
                     className="w-full h-10 px-3 border rounded-md text-sm"
-                    placeholder="e.g. JKG12-4399T"
+                    placeholder={t('hotlist.manual.partNumberPlaceholder')}
                     value={manualForm.partNumber}
                     onChange={(e) => setManualForm({ ...manualForm, partNumber: e.target.value })}
                     required
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">Date</label>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('common.date')}</label>
                   <input
                     type="date"
                     className="w-full h-10 px-3 border rounded-md text-sm"
@@ -459,7 +465,7 @@ export function Hotlist() {
                   />
                 </div>
                 <div className="space-y-1.5">
-                  <label className="text-xs font-semibold text-muted-foreground uppercase">BI Total</label>
+                  <label className="text-xs font-semibold text-muted-foreground uppercase">{t('hotlist.table.biTotal')}</label>
                   <input
                     type="number"
                     step="0.01"
@@ -477,14 +483,14 @@ export function Hotlist() {
                     className="h-10 px-6 bg-primary text-primary-foreground rounded-md font-medium text-sm w-full md:w-auto flex items-center justify-center gap-2 disabled:opacity-50"
                   >
                     {addManualMutation.isPending && <Loader2 className="w-4 h-4 animate-spin" />}
-                    Simpan
+                    {t('common.save')}
                   </button>
                   <button
                     type="button"
                     onClick={() => setIsManualOpen(false)}
                     className="h-10 px-4 bg-muted text-muted-foreground rounded-md font-medium text-sm"
                   >
-                    Batal
+                    {t('common.cancel')}
                   </button>
                 </div>
               </form>
@@ -497,9 +503,9 @@ export function Hotlist() {
               {periods.length === 0 && !periodsLoading && (
                 <div className="py-12 text-center text-muted-foreground border rounded-lg bg-card">
                   <FileSpreadsheet className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
-                  <p className="text-base font-semibold">Belum ada periode</p>
+                  <p className="text-base font-semibold">{t('hotlist.period.none')}</p>
                   <p className="text-sm mt-1">
-                    Buat periode dulu (mis. September 2026), lalu upload data HOTLIST ke periode itu.
+                    {t('hotlist.period.noneHint')}
                   </p>
                 </div>
               )}
@@ -515,11 +521,11 @@ export function Hotlist() {
                     </div>
                     <div className="min-w-0">
                       <h3 className="font-semibold text-foreground flex items-center gap-1.5">
-                        <span className="truncate">{p.label}</span>
+                        <span className="truncate">{periodDisplayLabel(p, lang)}</span>
                         {p.isLocked && <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
                       </h3>
                       <p className="text-xs text-muted-foreground mt-0.5">
-                        {p.counts.HOTLIST} Item Hot List · {p.counts.MRP} baris MRP
+                        {t('hotlist.period.counts', { hotlist: p.counts.HOTLIST, mrp: p.counts.MRP })}
                       </p>
                     </div>
                   </div>
@@ -527,7 +533,7 @@ export function Hotlist() {
 
                 <div className="p-5 border-2 border-dashed rounded-lg bg-card flex flex-col gap-3 justify-center">
                   <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                    <CalendarPlus className="w-4 h-4" /> Buat Periode Baru
+                    <CalendarPlus className="w-4 h-4" /> {t('hotlist.period.createTitle')}
                   </div>
                   <input
                     type="month"
@@ -541,7 +547,7 @@ export function Hotlist() {
                     className="w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center gap-2"
                   >
                     {createPeriod.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                    Buat {newPeriodMonth ? monthLabel(newPeriodMonth) : 'Periode'}
+                    {t('hotlist.period.create')} {newPeriodMonth ? monthLabel(newPeriodMonth, lang) : t('hotlist.period.fallbackLabel')}
                   </button>
                 </div>
               </div>
@@ -553,7 +559,7 @@ export function Hotlist() {
                   <button 
                     onClick={() => setSelectedPeriodId(null)}
                     className="p-2 hover:bg-background rounded-md border text-muted-foreground hover:text-foreground transition-colors shrink-0"
-                    title="Kembali ke daftar periode"
+                    title={t('hotlist.period.backToList')}
                   >
                     <ArrowLeft className="w-4 h-4" />
                   </button>
@@ -561,7 +567,7 @@ export function Hotlist() {
                     <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground w-4 h-4" />
                     <input
                       type="text"
-                      placeholder={`Cari di ${selectedPeriod?.label ?? ''}...`}
+                      placeholder={t('hotlist.searchIn', { label: selectedPeriod?.label ?? '' })}
                       className="w-full pl-9 pr-4 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary"
                       value={searchTerm}
                       onChange={(e) => setSearchTerm(e.target.value)}
@@ -576,11 +582,11 @@ export function Hotlist() {
                     className="flex items-center gap-2 px-3 py-1.5 bg-destructive text-destructive-foreground hover:bg-destructive/90 rounded-md font-medium text-sm transition-colors animate-in fade-in"
                   >
                     {bulkDeleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />}
-                    Hapus ({selectedIds.length})
+                    {t('hotlist.bulkDelete', { count: selectedIds.length })}
                   </button>
                 )}
                 <div className="text-sm font-medium text-muted-foreground bg-background px-3 py-1.5 border rounded-md">
-                  Total Data: {filteredRecords.length}
+                  {t('hotlist.totalData', { count: filteredRecords.length })}
                 </div>
               </div>
             </div>
@@ -597,10 +603,10 @@ export function Hotlist() {
                         onChange={handleSelectAll}
                       />
                     </th>
-                    <th className="px-6 py-4 font-semibold w-1/3">Part Number</th>
-                    <th className="px-6 py-4 font-semibold">Date</th>
-                    <th className="px-6 py-4 font-semibold">BI Total</th>
-                    <th className="px-6 py-4 font-semibold text-right">Aksi</th>
+                    <th className="px-6 py-4 font-semibold w-1/3">{t('hotlist.table.partNumber')}</th>
+                    <th className="px-6 py-4 font-semibold">{t('common.date')}</th>
+                    <th className="px-6 py-4 font-semibold">{t('hotlist.table.biTotal')}</th>
+                    <th className="px-6 py-4 font-semibold text-right">{t('common.actions')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -608,15 +614,15 @@ export function Hotlist() {
                     <tr>
                       <td colSpan={5} className="px-6 py-12 text-center text-muted-foreground">
                         <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" />
-                        <p className="mt-2 text-sm font-medium">Memuat data...</p>
+                        <p className="mt-2 text-sm font-medium">{t('common.loading')}</p>
                       </td>
                     </tr>
                   ) : filteredRecords.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="px-6 py-12 text-center text-muted-foreground">
                         <FileSpreadsheet className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
-                        <p className="text-base font-semibold">Tidak ada data HOTLIST</p>
-                        <p className="text-sm mt-1">Upload excel atau isi manual untuk menambahkan data.</p>
+                        <p className="text-base font-semibold">{t('hotlist.empty.title')}</p>
+                        <p className="text-sm mt-1">{t('hotlist.empty.hint')}</p>
                       </td>
                     </tr>
                   ) : (
@@ -684,24 +690,24 @@ export function Hotlist() {
                             </td>
                             <td className="px-6 py-3 font-medium">
                               <div className="flex flex-col gap-1">
-                                <span>{format(new Date(record.date), 'dd MMM yyyy')}</span>
+                                <span>{format(new Date(record.date), 'dd MMM yyyy', { locale: dateLocale })}</span>
                                 {record.previousDate && (
                                   <span className="text-xs text-muted-foreground flex items-center gap-1">
                                     <span className="w-1.5 h-1.5 rounded-full bg-orange-400"></span>
-                                    Prev: {format(new Date(record.previousDate), 'dd MMM yyyy')}
+                                    {t('hotlist.prevDate')} {format(new Date(record.previousDate), 'dd MMM yyyy', { locale: dateLocale })}
                                   </span>
                                 )}
                               </div>
                             </td>
                             <td className="px-6 py-3">
-                              <span className="font-bold">{record.biTotal.toLocaleString(undefined, { minimumFractionDigits: 1, maximumFractionDigits: 2 })}</span>
+                              <span className="font-bold">{record.biTotal.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 2 })}</span>
                             </td>
                             <td className="px-6 py-3 text-right">
                               <div className="flex items-center justify-end gap-1">
                                 <button
                                   onClick={() => handleEditClick(record)}
                                   className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition-colors"
-                                  title="Edit"
+                                  title={t('common.edit')}
                                 >
                                   <Pencil className="w-4 h-4" />
                                 </button>
@@ -709,7 +715,7 @@ export function Hotlist() {
                                   onClick={() => handleDelete(record.id)}
                                   disabled={deleteMutation.isPending && deleteMutation.variables === record.id}
                                   className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
-                                  title="Delete"
+                                  title={t('common.delete')}
                                 >
                                   {deleteMutation.isPending && deleteMutation.variables === record.id ? (
                                     <Loader2 className="w-4 h-4 animate-spin text-destructive" />

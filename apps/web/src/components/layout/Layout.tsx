@@ -6,19 +6,25 @@ import type { ModuleName } from '../../stores/authStore';
 import { isFeatureEnabled, type FeatureName } from '../../lib/features';
 import { useNavigationStore } from '../../stores/navigationStore';
 import { useEffect, useState } from 'react';
+import { useTranslation } from '../../i18n';
+import { LanguageSwitcher } from '../LanguageSwitcher';
 
-const MODULES: { id: ModuleName; name: string; icon: any }[] = [
-  { id: 'production', name: 'Production Planning', icon: Factory },
-  { id: 'material', name: 'Material Planning', icon: Package },
-  { id: 'masterdata', name: 'Master Data', icon: Database },
-  { id: 'system', name: 'System', icon: Settings },
+const MODULES: { id: ModuleName; labelKey: string; icon: any }[] = [
+  { id: 'production', labelKey: 'layout.modules.production', icon: Factory },
+  { id: 'material', labelKey: 'layout.modules.material', icon: Package },
+  { id: 'masterdata', labelKey: 'layout.modules.masterdata', icon: Database },
+  { id: 'system', labelKey: 'layout.modules.system', icon: Settings },
 ];
 
+/** Kategori data untuk menu Master Data (dipakai badge & filter). */
+type MenuScope = 'both' | 'production' | 'material';
+
 interface MenuItem {
-  name: string;
+  labelKey: string;
   path: string;
   icon: any;
-  badge?: string;
+  badgeKey?: string;
+  scope?: MenuScope;
   adminOnly?: boolean;
   superAdminOnly?: boolean;
   /** Nama feature flag. Menu disembunyikan kalau flag-nya mati. */
@@ -27,29 +33,29 @@ interface MenuItem {
 
 const SIDEBAR_MENUS: Record<ModuleName, MenuItem[]> = {
   production: [
-    { name: 'Dashboard Production', path: '/', icon: LayoutDashboard },
-    { name: 'Daily Schedule', path: '/schedule', icon: CalendarClock },
-    { name: 'Item Tracking', path: '/tracking', icon: Activity },
-    { name: 'Shortage Detail', path: '/shortage-detail', icon: ShieldAlert },
-    { name: 'Finish Good Inventory', path: '/fg-stock', icon: Box },
+    { labelKey: 'layout.menu.dashboardProduction', path: '/', icon: LayoutDashboard },
+    { labelKey: 'layout.menu.dailySchedule', path: '/schedule', icon: CalendarClock },
+    { labelKey: 'layout.menu.itemTracking', path: '/tracking', icon: Activity },
+    { labelKey: 'layout.menu.shortageDetail', path: '/shortage-detail', icon: ShieldAlert },
+    { labelKey: 'layout.menu.fgInventory', path: '/fg-stock', icon: Box },
   ],
   material: [
-    { name: 'Material Calculation', path: '/material-calculation', icon: Calculator, feature: 'materialCalculation' },
-    { name: 'Raw Material Stock', path: '/stock-raw-material', icon: FileSpreadsheet },
+    { labelKey: 'layout.menu.materialCalculation', path: '/material-calculation', icon: Calculator, feature: 'materialCalculation' },
+    { labelKey: 'layout.menu.rawMaterialStock', path: '/stock-raw-material', icon: FileSpreadsheet },
   ],
   masterdata: [
-    { name: '26-Week Demand (MRP)', path: '/weekly-demand', icon: CalendarRange, badge: 'Production & Material' },
-    { name: 'Work in Progress (WIP)', path: '/wip', icon: Settings2, badge: 'Production & Material' },
-    { name: 'Finish Good (FG) Stock', path: '/fg-stock', icon: Box, badge: 'Production' },
-    { name: 'Daily Schedule', path: '/schedule', icon: CalendarClock, badge: 'Production' },
-    { name: 'Hot List', path: '/hotlist', icon: FileSpreadsheet, badge: 'Material' },
-    { name: 'NPOF Materials', path: '/npof-materials', icon: FileSpreadsheet, badge: 'Material' },
-    { name: 'Stock Raw Material', path: '/stock-raw-material', icon: FileSpreadsheet, badge: 'Material' },
-    { name: 'Outstanding PO', path: '/outstanding-po', icon: FileSpreadsheet, badge: 'Material' },
+    { labelKey: 'layout.menu.weeklyDemand', path: '/weekly-demand', icon: CalendarRange, badgeKey: 'layout.badge.productionAndMaterial', scope: 'both' },
+    { labelKey: 'layout.menu.wip', path: '/wip', icon: Settings2, badgeKey: 'layout.badge.productionAndMaterial', scope: 'both' },
+    { labelKey: 'layout.menu.fgStock', path: '/fg-stock', icon: Box, badgeKey: 'layout.badge.production', scope: 'production' },
+    { labelKey: 'layout.menu.dailySchedule', path: '/schedule', icon: CalendarClock, badgeKey: 'layout.badge.production', scope: 'production' },
+    { labelKey: 'layout.menu.hotList', path: '/hotlist', icon: FileSpreadsheet, badgeKey: 'layout.badge.material', scope: 'material' },
+    { labelKey: 'layout.menu.npofMaterials', path: '/npof-materials', icon: FileSpreadsheet, badgeKey: 'layout.badge.material', scope: 'material' },
+    { labelKey: 'layout.menu.stockRawMaterial', path: '/stock-raw-material', icon: FileSpreadsheet, badgeKey: 'layout.badge.material', scope: 'material' },
+    { labelKey: 'layout.menu.outstandingPo', path: '/outstanding-po', icon: FileSpreadsheet, badgeKey: 'layout.badge.material', scope: 'material' },
   ],
   system: [
-    { name: 'Dropdown Management', path: '/items', icon: Settings2, adminOnly: true },
-    { name: 'User Management', path: '/users', icon: Users, superAdminOnly: true },
+    { labelKey: 'layout.menu.dropdownManagement', path: '/items', icon: Settings2, adminOnly: true },
+    { labelKey: 'layout.menu.userManagement', path: '/users', icon: Users, superAdminOnly: true },
   ]
 };
 
@@ -58,6 +64,7 @@ export function Layout() {
   const router = useRouter();
   const pathname = routerState.location.pathname;
 
+  const { t } = useTranslation();
   const { user, logout, canView, canEdit } = useAuthStore();
   const { activeModule, setActiveModule } = useNavigationStore();
   const [sidebarOpen, setSidebarOpen] = useState(true);
@@ -91,10 +98,10 @@ export function Layout() {
 
     if (activeModule === 'masterdata' && masterDataFilter !== 'all') {
       if (masterDataFilter === 'production') {
-        return item.badge?.includes('Production');
+        return item.scope === 'production' || item.scope === 'both';
       }
       if (masterDataFilter === 'material') {
-        return item.badge?.includes('Material');
+        return item.scope === 'material' || item.scope === 'both';
       }
     }
 
@@ -158,7 +165,7 @@ export function Layout() {
                   )}
                 >
                   <Icon size={16} />
-                  <span>{mod.name}</span>
+                  <span>{t(mod.labelKey)}</span>
                 </button>
               );
             })}
@@ -166,14 +173,15 @@ export function Layout() {
         </div>
 
         <div className="flex items-center space-x-4">
+          <LanguageSwitcher />
           <button className="p-2 rounded-full hover:bg-secondary relative">
             <Bell size={20} className="text-muted-foreground" />
             <span className="absolute top-1 right-1 w-2 h-2 bg-destructive rounded-full"></span>
           </button>
           <div className="flex items-center space-x-3 border-l pl-4">
             <div className="flex flex-col text-right hidden sm:flex">
-              <span className="text-sm font-semibold">{user?.name || 'User'}</span>
-              <span className="text-xs text-muted-foreground">{user?.role?.replace('_', ' ') || 'Role'}</span>
+              <span className="text-sm font-semibold">{user?.name || t('layout.user')}</span>
+              <span className="text-xs text-muted-foreground">{user?.role?.replace('_', ' ') || t('layout.role')}</span>
             </div>
             <div className="w-8 h-8 rounded-full bg-primary text-primary-foreground flex items-center justify-center font-bold">
               {user?.name?.charAt(0).toUpperCase() || 'U'}
@@ -193,7 +201,7 @@ export function Layout() {
         >
           <div className="p-4 border-b bg-muted/30">
             <h2 className="font-semibold text-sm text-muted-foreground uppercase tracking-wider">
-              {MODULES.find(m => m.id === activeModule)?.name}
+              {t(MODULES.find(m => m.id === activeModule)?.labelKey ?? 'layout.modules.production')}
             </h2>
           </div>
 
@@ -201,16 +209,16 @@ export function Layout() {
           {activeModule === 'masterdata' && (
             <div className="px-3 pt-3 pb-2 border-b bg-muted/10">
               <label className="text-[11px] text-muted-foreground font-semibold uppercase tracking-wider mb-1.5 block">
-                Filter Filter Data:
+                {t('layout.filterData')}
               </label>
               <select
                 value={masterDataFilter}
                 onChange={(e) => setMasterDataFilter(e.target.value as 'all' | 'production' | 'material')}
                 className="w-full text-xs font-medium bg-card border rounded-md px-2.5 py-1.5 shadow-sm focus:outline-none focus:ring-1 focus:ring-primary cursor-pointer"
               >
-                <option value="all">🌐 All Master Data (Semua)</option>
-                <option value="production">🏭 Production Data</option>
-                <option value="material">📦 Material Data</option>
+                <option value="all">{t('layout.masterData.all')}</option>
+                <option value="production">{t('layout.masterData.production')}</option>
+                <option value="material">{t('layout.masterData.material')}</option>
               </select>
             </div>
           )}
@@ -234,19 +242,19 @@ export function Layout() {
                 >
                   <div className="flex items-center space-x-3">
                     <Icon size={18} className={cn(isActive ? "text-primary-foreground" : "text-muted-foreground group-hover:text-foreground")} />
-                    <span className="font-medium">{item.name}</span>
+                    <span className="font-medium">{t(item.labelKey)}</span>
                   </div>
-                  {item.badge && (
+                  {item.badgeKey && (
                     <div className="mt-1.5 ml-7">
                       <span className={cn(
                         "text-[10px] px-1.5 py-0.5 rounded-sm font-medium border",
-                        item.badge.includes('Production & Material')
+                        item.scope === 'both'
                           ? "bg-indigo-100 text-indigo-700 border-indigo-200 dark:bg-indigo-900/30 dark:text-indigo-300 dark:border-indigo-800"
-                          : item.badge.includes('Production')
+                          : item.scope === 'production'
                             ? "bg-emerald-100 text-emerald-700 border-emerald-200 dark:bg-emerald-900/30 dark:text-emerald-300 dark:border-emerald-800"
                             : "bg-amber-100 text-amber-700 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800"
                       )}>
-                        {item.badge}
+                        {t(item.badgeKey)}
                       </span>
                     </div>
                   )}
@@ -261,7 +269,7 @@ export function Layout() {
               className="flex w-full items-center space-x-3 px-3 py-2 rounded-md transition-colors hover:bg-destructive/10 text-destructive hover:text-destructive"
             >
               <LogOut size={18} />
-              <span className="font-medium">Logout</span>
+              <span className="font-medium">{t('layout.logout')}</span>
             </button>
           </div>
         </aside>
@@ -272,7 +280,7 @@ export function Layout() {
           {isViewOnly && (
             <div className="bg-amber-100 dark:bg-amber-900/40 text-amber-800 dark:text-amber-200 px-4 py-2 text-sm font-medium flex items-center justify-center border-b border-amber-200 dark:border-amber-800 shrink-0">
               <ShieldAlert size={16} className="mr-2" />
-              View-Only Mode. You do not have permission to edit data in this module.
+              {t('layout.viewOnlyBanner')}
             </div>
           )}
 

@@ -458,6 +458,12 @@ enum CycleStatus {
   CALCULATED // minimal sudah dihitung sekali (TETAP boleh diedit)
 }
 
+/// Jenis kolam material: lot stok raw material atau baris Outstanding PO.
+enum MaterialPoolKind {
+  STOCK
+  PO
+}
+
 model PlanningCycle {
   id String @id @default(cuid())
 
@@ -505,6 +511,7 @@ model PlanningCycle {
   uploads   CycleSourceUpload[]
   results   CycleResult[]
   auditLogs CycleAuditLog[]
+  exclusions MaterialCalcExclusion[]
   // Catatan: TIDAK ada relasi ke NPOF — dipakai bersama semua periode.
 
   @@unique([uploadMonth])
@@ -595,4 +602,54 @@ model CycleAuditLog {
   @@index([cycleId, sourceType])
   @@index([userId])
   @@map("cycle_audit_logs")
+}
+
+/// Material dari kolam (lot stok / baris Outstanding PO) yang DIKELUARKAN user
+/// dari perhitungan SATU ukuran (grup) tertentu.
+///
+/// Dipakai ketika sebuah material sebenarnya TIDAK ikut dalam perhitungan ukuran
+/// ini — mis. karena ukurannya hanya kelipatan (117 cm untuk 58,5 cm) atau karena
+/// material itu sudah dipakai ukuran lain. Selama baris ini ada, pool item
+/// tersebut DILEWATI untuk grup itu, sehingga otomatis jadi tersedia bagi grup
+/// lain (alokasi dijalankan ulang oleh endpoint-nya).
+///
+/// Berlaku PER PERIODE (periode terisolasi). MENGHAPUS baris = memakai material
+/// itu lagi untuk grup tersebut — jalur "kembalikan".
+model MaterialCalcExclusion {
+  id      String           @id @default(cuid())
+  cycleId String
+  kind    MaterialPoolKind
+
+  /// `${ukuran}||${gramatur}||${supplier}` — WAJIB sama dengan `groupKey` di
+  /// materialCalcEngine.ts, kalau tidak pengecualian tidak akan terbaca.
+  groupKey String
+
+  /// Identitas pool item: STOCK = `${itemDesc}||${supplier}` (hasil agregasi lot),
+  /// PO = `id` baris `outstanding_pos`.
+  poolRef String
+
+  /// Snapshot teks untuk tampilan & jejak audit — TIDAK dipakai perhitungan.
+  groupLabel String
+  poolLabel  String
+
+  /// Jumlah yang DIKELUARKAN dari ukuran ini — hanya untuk pengecualian
+  /// SEBAGIAN (2026-10-15): user boleh memakai sebagian qty lot/PO, sisanya
+  /// dikeluarkan dari ukuran ini agar bisa dipakai ukuran lain.
+  /// NULL / 0 = seluruh pool item dikeluarkan (perilaku lama).
+  qty Float?
+
+  /// Satuan `qty`: `kg` (bagian bersatuan kg) atau `sheet` (bagian lembar).
+  unit String?
+
+  /// Alasan user (wajib diisi lewat UI, boleh kosong dari API).
+  reason    String?   @db.Text
+  createdBy String?
+  createdAt DateTime  @default(now())
+  updatedAt DateTime  @updatedAt
+
+  cycle PlanningCycle @relation(fields: [cycleId], references: [id], onDelete: Cascade)
+
+  @@unique([cycleId, kind, groupKey, poolRef])
+  @@index([cycleId, groupKey])
+  @@map("material_calc_exclusions")
 }

@@ -68,6 +68,8 @@ export function useBulkUpsertWeeklySchedule() {
         quantity: number;
       }>;
       saveMode: 'overwrite' | 'add';
+      /** Replace every MRP row in the selected period/module during Excel overwrite. */
+      replacePeriod?: boolean;
       periodId: string;
       moduleType: DataModule;
     }) =>

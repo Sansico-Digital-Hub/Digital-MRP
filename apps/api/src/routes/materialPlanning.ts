@@ -4,7 +4,11 @@ import { config } from '../config';
 import { authenticate, requireRole } from '../middleware/auth';
 import { EDIT_ROLES } from '../lib/permissions';
 import { computePeriodSignature, compareSignature } from '../lib/periodScope';
-import { runMaterialCalculation, type MaterialCalcSource } from '../lib/materialCalcEngine';
+import {
+  poolQtyUnit,
+  runMaterialCalculation,
+  type MaterialCalcSource,
+} from '../lib/materialCalcEngine';
 import { analyzeNpofCoverage } from '../lib/npofCoverage';
 
 // Material Planning HANYA membaca data milik modul MATERIAL.
@@ -156,6 +160,191 @@ async function writeAudit(params: {
 // `import-live` SUDAH DIHAPUS. Sejak periode pindah ke Master Data (`periodId`),
 // data periode BUKAN lagi salinan: halaman Master Data menulis LANGSUNG ke tabel
 // periode. Perhitungan cukup membaca tabel Master Data dengan filter `periodId`.
+
+/** Hasil menjalankan perhitungan: berhasil, atau pesan siap dikirim ke klien. */
+type CalculateOutcome =
+  | {
+      ok: true;
+      created: { id: string };
+      result: ReturnType<typeof runMaterialCalculation>;
+      runNumber: number;
+      calculatedAt: Date;
+    }
+  | { ok: false; status: 400 | 404 | 409; message: string };
+
+/**
+ * Jalankan perhitungan untuk SATU periode dan simpan hasilnya sebagai run BARU.
+ *
+ * Diekstrak dari endpoint `/calculate` supaya ada DUA jalur yang memakai logika
+ * yang sama persis:
+ *  1. `POST /cycles/:id/calculate` — tombol "Hitung" / "Hitung Ulang".
+ *  2. CRUD pengecualian pool (`/cycles/:id/exclusions`) — keputusan user
+ *     "material ini tidak ikut untuk ukuran ini" harus LANGSUNG mengubah angka
+ *     Stock As Of / Outstanding PO / End Ind, jadi dihitung ulang otomatis.
+ */
+async function calculateCycleResult(cycleId: string, userId: string): Promise<CalculateOutcome> {
+  const cycle = await requireCycle(cycleId);
+  if (!cycle) return { ok: false, status: 404, message: 'Periode tidak ditemukan' };
+  if (cycle.isLocked) {
+    return { ok: false, status: 409, message: 'Periode terkunci. Buka kunci dulu.' };
+  }
+
+  // Sejak 2026-09-28 data periode dibaca LANGSUNG dari tabel Master Data
+  // (difilter periodId) — tidak ada lagi tabel snapshot Cycle*.
+  const [mrpRows, hotlists, stocks, pos, wips, npofs, exclusions] = await Promise.all([
+    prisma.weeklySchedule.findMany({ where: { periodId: cycleId, moduleType: MATERIAL }, include: { item: true } }),
+    prisma.hotlist.findMany({ where: { periodId: cycleId } }),
+    prisma.stockRawMaterial.findMany({ where: { periodId: cycleId }, orderBy: { date: 'desc' } }),
+    prisma.outstandingPO.findMany({ where: { periodId: cycleId } }),
+    prisma.wIP.findMany({ where: { periodId: cycleId, moduleType: MATERIAL }, include: { item: true } }),
+    prisma.npofMaterial.findMany(), // global, dipakai bersama semua periode
+    // Penawaran pool yang dikeluarkan user untuk ukuran tertentu (per periode).
+    prisma.materialCalcExclusion.findMany({ where: { cycleId } }),
+  ]);
+
+  if (mrpRows.length === 0) {
+    return {
+      ok: false,
+      status: 400,
+      message:
+        'Periode ini belum punya data MRP untuk Material Planning. Upload data MRP 26 Weeks di halaman Master Data dengan modul "Material Planning" dipilih.',
+    };
+  }
+
+  const source: MaterialCalcSource = {
+    mrpWeeks: mrpRows.map((r) => ({
+      partNumber: r.item.partNumber,
+      description: r.item.itemName,
+      year: r.year,
+      weekNumber: r.weekNumber,
+      weekStartDate: r.weekStartDate,
+      weekEndDate: r.weekEndDate,
+      quantity: r.quantity,
+    })),
+    hotlists: hotlists.map((h) => ({ partNumber: h.partNumber, biTotal: h.biTotal })),
+    stocks: stocks.map((s) => ({ itemDesc: s.itemDesc, supplier: s.supplier, qty: s.qty, unit: s.unit })),
+    pos: pos.map((p) => ({
+      // `id` dipakai sebagai identitas stabil baris PO (pengecualian user).
+      id: p.id,
+      itemDesc: p.itemDesc,
+      supplierName: p.supplierName,
+      qtyOrder: p.qtyOrder,
+      qtyOrderUnit: p.qtyOrderUnit,
+      qtyDelivered: p.qtyDelivered,
+      planReceivedDate: p.planReceivedDate,
+      poNumber: p.poNumber,
+    })),
+    wips: wips.map((w) => ({ partNumber: w.item.partNumber, location: w.location, quantity: w.quantity })),
+    npofs,
+    exclusions: exclusions.map((e) => ({
+      source: e.kind === 'STOCK' ? ('stock' as const) : ('po' as const),
+      groupKey: e.groupKey,
+      poolRef: e.poolRef,
+      reason: e.reason,
+      // Pengecualian SEBAGIAN: `qty` = jumlah yang dikeluarkan dari ukuran ini.
+      qty: e.qty,
+      unit: e.unit,
+    })),
+  };
+
+  // Rentang tanggal diambil dari DATA MRP periode ini (sumber kebenaran).
+  // Kolom `PlanningCycle.mrpStartDate` hanya cadangan: kalau keduanya berbeda,
+  // data yang menang supaya `periodStartDate` (dasar penerjemahan tanggal PO
+  // menjadi indeks minggu) tidak pernah memakai nilai basi.
+  const periodStartDate =
+    mrpRows.reduce<Date | null>(
+      (min, r) => (!min || r.weekStartDate < min ? r.weekStartDate : min),
+      null,
+    ) ??
+    cycle.mrpStartDate;
+  if (!periodStartDate) {
+    return {
+      ok: false,
+      status: 400,
+      message: 'Tanggal mulai MRP periode ini tidak diketahui. Upload ulang data MRP.',
+    };
+  }
+
+  const result = runMaterialCalculation(source, {
+    weekCount: cycle.weekCount,
+    periodStartDate,
+    toleranceCm: config.materialCalc.sizeToleranceCm,
+    sheetsPerRim: config.materialCalc.sheetsPerRim,
+    requireSupplierMatch: config.materialCalc.requireSupplierMatch,
+  });
+
+  const calculatedAt = new Date();
+  const runNumber = cycle.calculatedRunCount + 1;
+
+  // Checksum data master tepat sebelum hasil disimpan — dasar validasi
+  // "Calculation tidak valid karena ada perubahan data".
+  const signature = await computePeriodSignature(cycleId, MATERIAL);
+
+  const created = await prisma.$transaction(async (tx) => {
+    // Siklus hidup hasil (rancangan §4.1.5):
+    //  - baris current lama yang isSaved = false -> dihapus
+    //  - baris current lama yang isSaved = true  -> tetap disimpan
+    const oldCurrent = await tx.cycleResult.findMany({ where: { cycleId, isCurrent: true } });
+    const toDelete = oldCurrent.filter((r) => !r.isSaved).map((r) => r.id);
+    if (toDelete.length > 0) {
+      await tx.cycleResult.deleteMany({ where: { id: { in: toDelete }, cycleId } });
+    }
+    if (oldCurrent.length > 0) {
+      await tx.cycleResult.updateMany({
+        where: { cycleId, isCurrent: true },
+        data: { isCurrent: false },
+      });
+    }
+
+    const row = await tx.cycleResult.create({
+      data: {
+        cycleId,
+        runNumber,
+        periodStartDate: result.periodStartDate,
+        periodEndDate: result.periodEndDate,
+        periodWeeks: result.periodWeeks,
+        calculatedAt,
+        calculatedBy: userId,
+        dataVersionAt: cycle.lastDataChangeAt,
+        isCurrent: true,
+        isSaved: false,
+        resultSnapshot: {
+          calculatedAt: calculatedAt.toISOString(),
+          periodStartDate: result.periodStartDate.toISOString(),
+          periodEndDate: result.periodEndDate.toISOString(),
+          periodWeeks: result.periodWeeks,
+          weekCount: result.weekCount,
+          groups: result.groups,
+        } as any,
+        summarySnapshot: { totals: result.totals, weeks: result.weeks } as any,
+        dataSignature: signature as any,
+      },
+    });
+
+    await tx.planningCycle.update({
+      where: { id: cycleId },
+      data: {
+        status: 'CALCULATED',
+        calculatedAt,
+        calculatedBy: userId,
+        calculatedRunCount: runNumber,
+      },
+    });
+
+    return row;
+  });
+
+  await writeAudit({
+    cycleId,
+    userId,
+    action: 'CREATE',
+    entityType: 'CycleResult',
+    entityId: created.id,
+    notes: `Perhitungan run #${runNumber}: ${result.totals.partCount} part, ${result.totals.partsWithStock} part dapat stok.`,
+  });
+
+  return { ok: true, created, result, runNumber, calculatedAt };
+}
 
 export default async function materialPlanningRoutes(server: FastifyInstance) {
   // Editor Material Planning: Admin, Super Admin, dan Material Planner.
@@ -566,152 +755,15 @@ export default async function materialPlanningRoutes(server: FastifyInstance) {
 
   server.post('/api/v1/material-planning/cycles/:id/calculate', { preValidation: editor }, async (request, reply) => {
     const { id } = request.params as { id: string };
-    const cycle = await requireCycle(id);
-    if (!cycle) return reply.code(404).send({ error: 'Not Found', message: 'Periode tidak ditemukan' });
-    if (cycle.isLocked) {
-      return reply.code(409).send({ error: 'Conflict', message: 'Periode terkunci. Buka kunci dulu.' });
-    }
-
-    // Sejak 2026-09-28 data periode dibaca LANGSUNG dari tabel Master Data
-    // (difilter periodId) — tidak ada lagi tabel snapshot Cycle*.
-    const [mrpRows, hotlists, stocks, pos, wips, npofs] = await Promise.all([
-      prisma.weeklySchedule.findMany({ where: { periodId: id, moduleType: MATERIAL }, include: { item: true } }),
-      prisma.hotlist.findMany({ where: { periodId: id } }),
-      prisma.stockRawMaterial.findMany({ where: { periodId: id }, orderBy: { date: 'desc' } }),
-      prisma.outstandingPO.findMany({ where: { periodId: id } }),
-      prisma.wIP.findMany({ where: { periodId: id, moduleType: MATERIAL }, include: { item: true } }),
-      prisma.npofMaterial.findMany(), // global, dipakai bersama semua periode
-    ]);
-
-    if (mrpRows.length === 0) {
-      return reply.code(400).send({
-        error: 'Bad Request',
-        message:
-          'Periode ini belum punya data MRP untuk Material Planning. Upload data MRP 26 Weeks di halaman Master Data dengan modul "Material Planning" dipilih.',
+    const outcome = await calculateCycleResult(id, request.user!.id);
+    if (!outcome.ok) {
+      return reply.code(outcome.status).send({
+        error:
+          outcome.status === 404 ? 'Not Found' : outcome.status === 409 ? 'Conflict' : 'Bad Request',
+        message: outcome.message,
       });
     }
-
-    const source: MaterialCalcSource = {
-      mrpWeeks: mrpRows.map((r) => ({
-        partNumber: r.item.partNumber,
-        description: r.item.itemName,
-        year: r.year,
-        weekNumber: r.weekNumber,
-        weekStartDate: r.weekStartDate,
-        weekEndDate: r.weekEndDate,
-        quantity: r.quantity,
-      })),
-      hotlists: hotlists.map((h) => ({ partNumber: h.partNumber, biTotal: h.biTotal })),
-      stocks: stocks.map((s) => ({ itemDesc: s.itemDesc, supplier: s.supplier, qty: s.qty, unit: s.unit })),
-      pos: pos.map((p) => ({
-        itemDesc: p.itemDesc,
-        supplierName: p.supplierName,
-        qtyOrder: p.qtyOrder,
-        qtyOrderUnit: p.qtyOrderUnit,
-        qtyDelivered: p.qtyDelivered,
-        planReceivedDate: p.planReceivedDate,
-        poNumber: p.poNumber,
-      })),
-      wips: wips.map((w) => ({ partNumber: w.item.partNumber, location: w.location, quantity: w.quantity })),
-      npofs,
-    };
-
-    // Rentang tanggal diambil dari DATA MRP periode ini (sumber kebenaran).
-    // Kolom `PlanningCycle.mrpStartDate` hanya cadangan: kalau keduanya berbeda,
-    // data yang menang supaya `periodStartDate` (dasar penerjemahan tanggal PO
-    // menjadi indeks minggu) tidak pernah memakai nilai basi.
-    const periodStartDate =
-      mrpRows.reduce<Date | null>(
-        (min, r) => (!min || r.weekStartDate < min ? r.weekStartDate : min),
-        null,
-      ) ??
-      cycle.mrpStartDate;
-    if (!periodStartDate) {
-      return reply.code(400).send({
-        error: 'Bad Request',
-        message: 'Tanggal mulai MRP periode ini tidak diketahui. Upload ulang data MRP.',
-      });
-    }
-
-    const result = runMaterialCalculation(source, {
-      weekCount: cycle.weekCount,
-      periodStartDate,
-      timelineBaseDate: periodStartDate,
-      toleranceCm: config.materialCalc.sizeToleranceCm,
-      sheetsPerRim: config.materialCalc.sheetsPerRim,
-      requireSupplierMatch: config.materialCalc.requireSupplierMatch,
-    });
-
-    const calculatedAt = new Date();
-    const runNumber = cycle.calculatedRunCount + 1;
-
-    // Checksum data master tepat sebelum hasil disimpan — dasar validasi
-    // "Calculation tidak valid karena ada perubahan data".
-    const signature = await computePeriodSignature(id, MATERIAL);
-
-    const created = await prisma.$transaction(async (tx) => {
-      // Siklus hidup hasil (rancangan §4.1.5):
-      //  - baris current lama yang isSaved = false -> dihapus
-      //  - baris current lama yang isSaved = true  -> tetap disimpan
-      const oldCurrent = await tx.cycleResult.findMany({ where: { cycleId: id, isCurrent: true } });
-      const toDelete = oldCurrent.filter((r) => !r.isSaved).map((r) => r.id);
-      if (toDelete.length > 0) {
-        await tx.cycleResult.deleteMany({ where: { id: { in: toDelete }, cycleId: id } });
-      }
-      if (oldCurrent.length > 0) {
-        await tx.cycleResult.updateMany({
-          where: { cycleId: id, isCurrent: true },
-          data: { isCurrent: false },
-        });
-      }
-
-      const row = await tx.cycleResult.create({
-        data: {
-          cycleId: id,
-          runNumber,
-          periodStartDate: result.periodStartDate,
-          periodEndDate: result.periodEndDate,
-          periodWeeks: result.periodWeeks,
-          calculatedAt,
-          calculatedBy: request.user!.id,
-          dataVersionAt: cycle.lastDataChangeAt,
-          isCurrent: true,
-          isSaved: false,
-          resultSnapshot: {
-            calculatedAt: calculatedAt.toISOString(),
-            periodStartDate: result.periodStartDate.toISOString(),
-            periodEndDate: result.periodEndDate.toISOString(),
-            periodWeeks: result.periodWeeks,
-            weekCount: result.weekCount,
-            groups: result.groups,
-          } as any,
-          summarySnapshot: { totals: result.totals, weeks: result.weeks } as any,
-          dataSignature: signature as any,
-        },
-      });
-
-      await tx.planningCycle.update({
-        where: { id },
-        data: {
-          status: 'CALCULATED',
-          calculatedAt,
-          calculatedBy: request.user!.id,
-          calculatedRunCount: runNumber,
-        },
-      });
-
-      return row;
-    });
-
-    await writeAudit({
-      cycleId: id,
-      userId: request.user!.id,
-      action: 'CREATE',
-      entityType: 'CycleResult',
-      entityId: created.id,
-      notes: `Perhitungan run #${runNumber}: ${result.totals.partCount} part, ${result.totals.partsWithStock} part dapat stok.`,
-    });
-
+    const { created, result, runNumber, calculatedAt } = outcome;
     return reply.code(201).send({
       data: {
         id: created.id,
@@ -727,6 +779,438 @@ export default async function materialPlanningRoutes(server: FastifyInstance) {
       },
     });
   });
+
+  // ══════════════════════════════════════════════════════════════════════
+  // PENGECUALIAN POOL PER UKURAN
+  // ══════════════════════════════════════════════════════════════════════
+  /**
+   * Permintaan user (2026-10-14): material yang muncul di rincian `Stock As Of`
+   * / `Outstanding PO` harus bisa DIKELUARKAN dari perhitungan satu ukuran saja
+   * — misalnya karena lot itu ukurannya hanya kelipatan, atau karena materialnya
+   * ternyata sudah dipakai ukuran lain sehingga tidak ikut perhitungan di sini.
+   *
+   * Pengecualian berlaku PER UKURAN (grup), bukan global: pool item yang
+   * dikeluarkan dari satu grup otomatis jadi tersedia bagi grup lain karena
+   * alokasi dijalankan ULANG. Menghapus baris = memakai material itu lagi
+   * ("kembalikan").
+   *
+   * Hak akses tulis: Admin, Super Admin, Material Planner (`EDIT_ROLES.material`).
+   */
+
+  /**
+   * Batas qty baris pool item (= qty pada rincian `Stock As Of` untuk STOCK,
+   * atau `PO qty` pada rincian `Outstanding PO`), dibaca dari snapshot hasil
+   * perhitungan yang aktif. Dipakai supaya jumlah yang dikeluarkan user tidak
+   * pernah melebihi qty barisnya.
+   *
+   * `null` = batas belum diketahui (periode belum dihitung / snapshot lama
+   * tanpa rincian), sehingga validasi dilewati dan engine tetap memakai
+   * `Math.min()` sebagai pengaman terakhir.
+   */
+  async function poolQtyLimit(
+    cycleId: string,
+    kind: 'STOCK' | 'PO',
+    groupKey: string,
+    poolRef: string,
+    unit: 'kg' | 'sheet',
+  ): Promise<number | null> {
+    const current = await prisma.cycleResult.findFirst({
+      where: { cycleId, isCurrent: true },
+      select: { resultSnapshot: true },
+    });
+    const groups = ((current?.resultSnapshot as any)?.groups ?? []) as Array<Record<string, any>>;
+    const group = groups.find(
+      (g) => (g.groupKey ?? `${g.ukuran}||${g.gramatur}||${g.supplier}`) === groupKey,
+    );
+    const summary = group?.weeklyMatrix?.summary as Record<string, any> | undefined;
+    if (!summary) return null;
+
+    const valueOf = (row: Record<string, any> | undefined) => {
+      if (!row) return null;
+      const raw = unit === 'sheet' ? row.totalSheet ?? row.qtySheet : row.totalKg ?? row.qtyKg;
+      const value = Number(raw);
+      return Number.isFinite(value) ? value : null;
+    };
+
+    if (kind === 'STOCK') {
+      const row = (summary.stockDetails ?? []).find((d: any) => d.poolRef === poolRef);
+      return valueOf(row);
+    }
+    for (const weekRows of summary.outstandingPoDetails ?? []) {
+      const row = (weekRows ?? []).find((d: any) => d.poolRef === poolRef);
+      if (row) return valueOf(row);
+    }
+    return null;
+  }
+
+  /** Daftar pengecualian periode ini — boleh dilihat semua role. */
+  server.get('/api/v1/material-planning/cycles/:id/exclusions', { preValidation: [authenticate] }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const rows = await prisma.materialCalcExclusion.findMany({
+      where: { cycleId: id },
+      orderBy: [{ createdAt: 'asc' }],
+    });
+    return reply.send({ data: rows });
+  });
+
+  /** Keluarkan satu pool item dari perhitungan satu ukuran, lalu hitung ulang. */
+  server.post('/api/v1/material-planning/cycles/:id/exclusions', { preValidation: editor }, async (request, reply) => {
+    const { id } = request.params as { id: string };
+    const cycle = await requireCycle(id);
+    if (!cycle) return reply.code(404).send({ error: 'Not Found', message: 'Periode tidak ditemukan' });
+    if (cycle.isLocked) {
+      return reply.code(409).send({ error: 'Conflict', message: 'Periode terkunci. Buka kunci dulu.' });
+    }
+
+    const body = (request.body ?? {}) as {
+      kind?: string;
+      groupKey?: string;
+      poolRef?: string;
+      /** Bentuk utama: satu nomor PO bisa berisi beberapa baris item. */
+      poolRefs?: string[];
+      groupLabel?: string;
+      poolLabel?: string;
+      reason?: string | null;
+      /**
+       * Jumlah yang DIKELUARKAN dari ukuran ini — hanya untuk pengecualian
+       * SEBAGIAN. Kosong/null = seluruh pool item dikeluarkan (perilaku lama).
+       * Hanya boleh diisi untuk SATU `poolRef`, karena angkanya milik satu
+       * baris Master Data.
+       */
+      qty?: number | string | null;
+      /** Satuan `qty`: `kg` (bagian bersatuan kg) atau `sheet` (bagian lembar). */
+      unit?: string | null;
+    };
+    const kindRaw = String(body.kind || '').toUpperCase();
+    if (kindRaw !== 'STOCK' && kindRaw !== 'PO') {
+      return reply.code(400).send({ error: 'Bad Request', message: 'kind wajib "STOCK" atau "PO".' });
+    }
+    const kind: 'STOCK' | 'PO' = kindRaw;
+    const groupKey = String(body.groupKey || '').trim();
+    // Nilai kosong / "null" / "undefined" DITOLAK: hasil perhitungan lama belum
+    // mengirim `poolRef`, dan kalau diteruskan akan tersimpan sebagai string
+    // "null" yang tidak pernah cocok dengan pool item mana pun.
+    const poolRefs = [
+      ...new Set(
+        [...(body.poolRefs ?? []), body.poolRef ?? '']
+          .map((v) => (v === null || v === undefined ? '' : String(v).trim()))
+          .filter((v) => v.length > 0 && v !== 'null' && v !== 'undefined'),
+      ),
+    ];
+    if (!groupKey || poolRefs.length === 0) {
+      return reply.code(400).send({ error: 'Bad Request', message: 'groupKey dan poolRefs wajib diisi.' });
+    }
+    const reason =
+      body.reason === undefined || body.reason === null
+        ? null
+        : String(body.reason).trim() || null;
+
+    // Pengecualian sebagian: `qty` = jumlah yang dikeluarkan dari ukuran ini.
+    const rawQty = body.qty;
+    let qty =
+      rawQty === undefined || rawQty === null || String(rawQty).trim() === ''
+        ? null
+        : Number(rawQty);
+    if (qty !== null && (!Number.isFinite(qty) || qty <= 0)) {
+      return reply
+        .code(400)
+        .send({ error: 'Bad Request', message: 'qty harus angka lebih besar dari 0 (atau dikosongkan).' });
+    }
+    if (qty !== null && poolRefs.length > 1) {
+      return reply.code(400).send({
+        error: 'Bad Request',
+        message: 'qty hanya boleh diisi untuk satu baris pool (satu poolRef).',
+      });
+    }
+    let unit = qty === null ? null : poolQtyUnit(body.unit);
+    if (qty !== null && unit !== null) {
+      const limit = await poolQtyLimit(id, kind, groupKey, poolRefs[0], unit);
+      if (limit !== null) {
+        const unitLabel = unit === 'sheet' ? 'lembar' : 'kg';
+        if (qty > limit + 1e-9) {
+          return reply.code(400).send({
+            error: 'Bad Request',
+            message: `Jumlah yang dikeluarkan (${qty} ${unitLabel}) melebihi qty baris ini (${limit} ${unitLabel}).`,
+          });
+        }
+        // Sama dengan total baris = keluarkan seluruhnya (perilaku lama).
+        if (qty >= limit - 1e-9) {
+          qty = null;
+          unit = null;
+        }
+      }
+    }
+
+    const groupLabel = String(body.groupLabel || groupKey).slice(0, 191);
+    const poolLabel = String(body.poolLabel || poolRefs.join(', ')).slice(0, 191);
+
+    // Idempoten: baris yang sudah ada cukup diperbarui alasannya, yang baru dibuat.
+    const existingRows = await prisma.materialCalcExclusion.findMany({
+      where: { cycleId: id, kind, groupKey, poolRef: { in: poolRefs } },
+    });
+    const rows: Array<{ id: string }> = [];
+    for (const poolRef of poolRefs) {
+      const existing = existingRows.find((r) => r.poolRef === poolRef);
+      const row = existing
+        ? await prisma.materialCalcExclusion.update({
+            where: { id: existing.id },
+            data: { reason: reason ?? existing.reason, qty, unit },
+          })
+        : await prisma.materialCalcExclusion.create({
+            data: {
+              cycleId: id,
+              kind,
+              groupKey,
+              poolRef,
+              groupLabel,
+              poolLabel,
+              reason,
+              qty,
+              unit,
+              createdBy: request.user!.id,
+            },
+          });
+      rows.push(row);
+    }
+
+    await writeAudit({
+      cycleId: id,
+      userId: request.user!.id,
+      action: 'CREATE',
+      sourceType: 'CALCULATION',
+      entityType: 'MaterialCalcExclusion',
+      entityId: rows[0]?.id,
+      notes: `Material ${qty === null ? 'dikeluarkan' : `dikeluarkan SEBAGIAN (${qty} ${
+        unit === 'sheet' ? 'lembar' : 'kg'
+      })`} dari ukuran "${groupLabel}" (${kind}, ${rows.length} baris): ${poolLabel}${
+        reason ? ` — alasan: ${reason}` : ''
+      }`,
+    });
+
+    const outcome = await calculateCycleResult(id, request.user!.id);
+    if (!outcome.ok) {
+      return reply.code(outcome.status).send({ error: 'Bad Request', message: outcome.message });
+    }
+
+    return reply.code(201).send({
+      data: { exclusions: rows, runNumber: outcome.runNumber, recalculated: true },
+    });
+  });
+
+  /**
+   * Ubah CATATAN ALASAN dan/atau JUMLAH yang dikeluarkan (pengecualian sebagian).
+   *
+   * Selama hanya alasan yang berubah, TIDAK ada angka perhitungan yang berubah →
+   * tidak dihitung ulang. Begitu `qty`/`unit` ikut dikirim, periode DIHITUNG
+   * ULANG karena jatah pemakaian ukuran itu berubah.
+   *
+   * Identitas baris (kind / groupKey / poolRef) sengaja tidak bisa diubah; untuk
+   * memindahkan ke ukuran lain, hapus lalu buat lagi.
+   */
+  server.patch(
+    '/api/v1/material-planning/cycles/:id/exclusions/:exclusionId',
+    { preValidation: editor },
+    async (request, reply) => {
+      const { id, exclusionId } = request.params as { id: string; exclusionId: string };
+      const found = await prisma.materialCalcExclusion.findFirst({
+        where: { id: exclusionId, cycleId: id },
+      });
+      if (!found) {
+        return reply.code(404).send({ error: 'Not Found', message: 'Pengecualian tidak ditemukan' });
+      }
+
+      const body = (request.body ?? {}) as {
+        reason?: string | null;
+        qty?: number | string | null;
+        unit?: string | null;
+      };
+      const { reason } = body;
+      if (reason === undefined && body.qty === undefined) {
+        return reply.code(400).send({
+          error: 'Bad Request',
+          message: 'Isi `reason` (string kosong untuk menghapus alasan) dan/atau `qty` (jumlah yang dikeluarkan).',
+        });
+      }
+      const nextReason = reason === undefined || reason === null ? found.reason : String(reason).trim() || null;
+
+      let nextQty = found.qty;
+      let nextUnit = found.unit;
+      let qtyChanged = false;
+      if (body.qty !== undefined) {
+        const raw = body.qty;
+        let parsed = raw === null || String(raw).trim() === '' ? null : Number(raw);
+        if (parsed !== null && (!Number.isFinite(parsed) || parsed <= 0)) {
+          return reply
+            .code(400)
+            .send({ error: 'Bad Request', message: 'qty harus angka lebih besar dari 0 (atau dikosongkan).' });
+        }
+        let parsedUnit = parsed === null ? null : poolQtyUnit(body.unit);
+        if (parsed !== null && parsedUnit !== null) {
+          // Batas = qty baris Stock As Of / Outstanding PO saat ini, supaya
+          // input ulang setelah salah isi tidak bisa melebihi qty barisnya.
+          const limit = await poolQtyLimit(
+            id,
+            found.kind as 'STOCK' | 'PO',
+            found.groupKey,
+            found.poolRef,
+            parsedUnit,
+          );
+          if (limit !== null) {
+            const unitLabel = parsedUnit === 'sheet' ? 'lembar' : 'kg';
+            if (parsed > limit + 1e-9) {
+              return reply.code(400).send({
+                error: 'Bad Request',
+                message: `Jumlah yang dikeluarkan (${parsed} ${unitLabel}) melebihi qty baris ini (${limit} ${unitLabel}).`,
+              });
+            }
+            if (parsed >= limit - 1e-9) {
+              parsed = null;
+              parsedUnit = null;
+            }
+          }
+        }
+        qtyChanged = parsed !== found.qty || (parsed !== null && parsedUnit !== found.unit);
+        nextQty = parsed;
+        nextUnit = parsedUnit;
+      }
+
+      const row = await prisma.materialCalcExclusion.update({
+        where: { id: found.id },
+        data: { reason: nextReason, qty: nextQty, unit: nextUnit },
+      });
+      await writeAudit({
+        cycleId: id,
+        userId: request.user!.id,
+        action: 'UPDATE',
+        sourceType: 'CALCULATION',
+        entityType: 'MaterialCalcExclusion',
+        entityId: row.id,
+        dataBefore: { reason: found.reason, qty: found.qty, unit: found.unit },
+        dataAfter: { reason: row.reason, qty: row.qty, unit: row.unit },
+        notes: `Pengecualian diperbarui${
+          qtyChanged
+            ? ` — jumlah dikeluarkan: ${row.qty === null ? 'seluruhnya' : `${row.qty} ${row.unit === 'sheet' ? 'lembar' : 'kg'}`}`
+            : ''
+        }: ${row.poolLabel}`,
+      });
+
+      if (!qtyChanged) return reply.send({ data: row, recalculated: false, runNumber: null });
+
+      const outcome = await calculateCycleResult(id, request.user!.id);
+      if (!outcome.ok) {
+        return reply.code(outcome.status).send({ error: 'Bad Request', message: outcome.message });
+      }
+      return reply.send({ data: row, recalculated: true, runNumber: outcome.runNumber });
+    },
+  );
+
+  /**
+   * Kembalikan material ke perhitungan ukuran itu, lalu hitung ulang.
+   *
+   * Mendukung beberapa id sekaligus lewat `?ids=a,b,c` karena SATU baris rincian
+   * PO bisa mewakili beberapa pool item (satu nomor PO berisi banyak item) —
+   * semuanya harus dikembalikan dalam SATU kali hitung ulang.
+   */
+  server.delete(
+    '/api/v1/material-planning/cycles/:id/exclusions',
+    { preValidation: editor },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const query = request.query as { ids?: string };
+      const ids = String(query.ids || '')
+        .split(',')
+        .map((v) => v.trim())
+        .filter(Boolean);
+      if (ids.length === 0) {
+        return reply.code(400).send({ error: 'Bad Request', message: 'Parameter `ids` wajib diisi.' });
+      }
+
+      const cycle = await requireCycle(id);
+      if (!cycle) return reply.code(404).send({ error: 'Not Found', message: 'Periode tidak ditemukan' });
+      if (cycle.isLocked) {
+        return reply.code(409).send({ error: 'Conflict', message: 'Periode terkunci. Buka kunci dulu.' });
+      }
+      const found = await prisma.materialCalcExclusion.findMany({
+        where: { id: { in: ids }, cycleId: id },
+      });
+      if (found.length === 0) {
+        return reply.code(404).send({ error: 'Not Found', message: 'Pengecualian tidak ditemukan' });
+      }
+
+      await prisma.materialCalcExclusion.deleteMany({
+        where: { id: { in: found.map((f) => f.id) }, cycleId: id },
+      });
+      for (const f of found) {
+        await writeAudit({
+          cycleId: id,
+          userId: request.user!.id,
+          action: 'DELETE',
+          sourceType: 'CALCULATION',
+          entityType: 'MaterialCalcExclusion',
+          entityId: f.id,
+          dataBefore: { kind: f.kind, groupKey: f.groupKey, poolRef: f.poolRef, reason: f.reason },
+          notes: `Material dikembalikan ke ukuran "${f.groupLabel}": ${f.poolLabel}`,
+        });
+      }
+
+      const outcome = await calculateCycleResult(id, request.user!.id);
+      return reply.send({
+        data: {
+          ids: found.map((f) => f.id),
+          deleted: found.length,
+          recalculated: outcome.ok,
+          runNumber: outcome.ok ? outcome.runNumber : null,
+        },
+      });
+    },
+  );
+
+  /** Kembalikan SATU pengecualian (dipakai skrip uji & pemanggil lama). */
+  server.delete(
+    '/api/v1/material-planning/cycles/:id/exclusions/:exclusionId',
+    { preValidation: editor },
+    async (request, reply) => {
+      const { id, exclusionId } = request.params as { id: string; exclusionId: string };
+      const cycle = await requireCycle(id);
+      if (!cycle) return reply.code(404).send({ error: 'Not Found', message: 'Periode tidak ditemukan' });
+      if (cycle.isLocked) {
+        return reply.code(409).send({ error: 'Conflict', message: 'Periode terkunci. Buka kunci dulu.' });
+      }
+      const found = await prisma.materialCalcExclusion.findFirst({
+        where: { id: exclusionId, cycleId: id },
+      });
+      if (!found) {
+        return reply.code(404).send({ error: 'Not Found', message: 'Pengecualian tidak ditemukan' });
+      }
+
+      await prisma.materialCalcExclusion.delete({ where: { id: found.id } });
+      await writeAudit({
+        cycleId: id,
+        userId: request.user!.id,
+        action: 'DELETE',
+        sourceType: 'CALCULATION',
+        entityType: 'MaterialCalcExclusion',
+        entityId: found.id,
+        dataBefore: {
+          kind: found.kind,
+          groupKey: found.groupKey,
+          poolRef: found.poolRef,
+          reason: found.reason,
+        },
+        notes: `Material dikembalikan ke ukuran "${found.groupLabel}": ${found.poolLabel}`,
+      });
+
+      const outcome = await calculateCycleResult(id, request.user!.id);
+      return reply.send({
+        data: {
+          id: found.id,
+          deleted: true,
+          recalculated: outcome.ok,
+          runNumber: outcome.ok ? outcome.runNumber : null,
+        },
+      });
+    },
+  );
 
   // ══════════════════════════════════════════════════════════════════════
   // HASIL PERHITUNGAN

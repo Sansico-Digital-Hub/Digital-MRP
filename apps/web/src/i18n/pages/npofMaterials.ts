@@ -1,0 +1,66 @@
+/**
+ * Terjemahan halaman NPOF Materials.
+ * Namespace: `npofMaterials.*`
+ */
+export default {
+  id: {
+    title: 'NPOF Materials',
+    subtitle: 'Kelola material yang diambil dari API NPOF eksternal',
+    syncFromNpof: 'Sinkronkan dari NPOF',
+    deleteSelected: 'Hapus Terpilih ({count})',
+    searchPlaceholder: 'Cari berdasarkan Part Number, Nama Produk, Material, Supplier...',
+    recordsFound: 'data ditemukan',
+    npofId: 'NPOF ID',
+    partNumber: 'Part Number',
+    productName: 'Nama Produk',
+    material: 'Material',
+    gramatur: 'Gramatur',
+    supplier: 'Supplier',
+    sheetedSize: 'Ukuran Lembar',
+    formulaMaterial: 'Formula Material',
+    ups: 'UPS',
+    lastUpdated: 'Terakhir Diperbarui',
+    loading: 'Memuat data material...',
+    emptyTitle: 'Tidak ada material ditemukan',
+    emptyHint: 'Coba sinkronkan dari NPOF atau sesuaikan pencarian Anda',
+    confirmSync:
+      'Tindakan ini akan mengambil data terbaru dari NPOF. Data yang sudah diubah secara manual TIDAK akan ditimpa. Lanjutkan?',
+    syncSuccess:
+      'Sinkronisasi selesai!\n\nData baru/diperbarui: {updated}\nDilewati (sudah diedit): {skipped}\nTotal diproses: {total}',
+    syncFailed: 'Gagal menyinkronkan data: {message}',
+    confirmDelete: 'Yakin ingin menghapus data ini?',
+    deleteFailed: 'Gagal menghapus data: {message}',
+    confirmBulkDelete: 'Yakin ingin menghapus {count} data?',
+    bulkDeleteFailed: 'Gagal menghapus data: {message}',
+  },
+  en: {
+    title: 'NPOF Materials',
+    subtitle: 'Manage materials fetched from external NPOF API',
+    syncFromNpof: 'Sync from NPOF',
+    deleteSelected: 'Delete Selected ({count})',
+    searchPlaceholder: 'Search by Part Number, Product Name, Material, Supplier...',
+    recordsFound: 'records found',
+    npofId: 'NPOF ID',
+    partNumber: 'Part Number',
+    productName: 'Product Name',
+    material: 'Material',
+    gramatur: 'Gramatur',
+    supplier: 'Supplier',
+    sheetedSize: 'Sheeted Size',
+    formulaMaterial: 'Formula Material',
+    ups: 'UPS',
+    lastUpdated: 'Last Updated',
+    loading: 'Loading materials data...',
+    emptyTitle: 'No materials found',
+    emptyHint: 'Try syncing from NPOF or adjusting your search',
+    confirmSync:
+      'This will fetch the latest data from NPOF. Existing data that has been manually edited will NOT be overwritten. Continue?',
+    syncSuccess:
+      'Sync complete!\n\nNew/Updated records: {updated}\nSkipped (already edited): {skipped}\nTotal processed: {total}',
+    syncFailed: 'Failed to sync data: {message}',
+    confirmDelete: 'Are you sure you want to delete this record?',
+    deleteFailed: 'Failed to delete record: {message}',
+    confirmBulkDelete: 'Are you sure you want to delete {count} records?',
+    bulkDeleteFailed: 'Failed to delete records: {message}',
+  },
+};

@@ -13,6 +13,7 @@
     "verify:ref-b": "tsx verify-ref-b.ts",
     "verify:npof-coverage": "tsx verify-npof-coverage.ts",
     "verify:pdf-export": "tsx verify-pdf-export.ts",
+    "seed:npof-testing": "tsx seed-npof-testing.ts",
     "test": "vitest",
     "prisma": "prisma",
     "prisma:generate": "prisma generate",

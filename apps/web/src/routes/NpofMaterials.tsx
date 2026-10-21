@@ -8,8 +8,10 @@ import {
 import { RefreshCw, Search, Trash2, Loader2, AlertCircle } from 'lucide-react';
 import { format } from 'date-fns';
 import { useAuthStore } from '../stores/authStore';
+import { useTranslation } from '../i18n';
 
 export function NpofMaterials() {
+  const { t, dateLocale } = useTranslation();
   const { data: materialsData, isLoading } = useNpofMaterials();
   const syncMutation = useSyncNpofMaterials();
   const deleteMutation = useDeleteNpofMaterial();
@@ -22,23 +24,23 @@ export function NpofMaterials() {
   const [selectedIds, setSelectedIds] = useState<string[]>([]);
 
   const handleSync = () => {
-    if (confirm('This will fetch the latest data from NPOF. Existing data that has been manually edited will NOT be overwritten. Continue?')) {
+    if (confirm(t('npofMaterials.confirmSync'))) {
       syncMutation.mutate(undefined, {
         onSuccess: (res) => {
-          alert(`Sync complete!\n\nNew/Updated records: ${res.syncCount}\nSkipped (already edited): ${res.skippedCount}\nTotal processed: ${res.totalProcessed}`);
+          alert(t('npofMaterials.syncSuccess', { updated: res.syncCount, skipped: res.skippedCount, total: res.totalProcessed }));
         },
         onError: (error: any) => {
-          alert(`Failed to sync data: ${error.message}`);
+          alert(t('npofMaterials.syncFailed', { message: error.message }));
         }
       });
     }
   };
 
   const handleDelete = (id: string) => {
-    if (confirm('Are you sure you want to delete this record?')) {
+    if (confirm(t('npofMaterials.confirmDelete'))) {
       deleteMutation.mutate(id, {
         onError: (error: any) => {
-          alert(`Failed to delete record: ${error.message}`);
+          alert(t('npofMaterials.deleteFailed', { message: error.message }));
         }
       });
     }
@@ -46,13 +48,13 @@ export function NpofMaterials() {
 
   const handleBulkDelete = () => {
     if (selectedIds.length === 0) return;
-    if (confirm(`Are you sure you want to delete ${selectedIds.length} records?`)) {
+    if (confirm(t('npofMaterials.confirmBulkDelete', { count: selectedIds.length }))) {
       bulkDeleteMutation.mutate(selectedIds, {
         onSuccess: () => {
           setSelectedIds([]);
         },
         onError: (error: any) => {
-          alert(`Failed to delete records: ${error.message}`);
+          alert(t('npofMaterials.bulkDeleteFailed', { message: error.message }));
         }
       });
     }
@@ -90,8 +92,8 @@ export function NpofMaterials() {
     <div className="p-6 max-w-[1600px] mx-auto space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">NPOF Materials</h1>
-          <p className="text-gray-500 mt-1">Manage materials fetched from external NPOF API</p>
+          <h1 className="text-2xl font-bold text-gray-900">{t('npofMaterials.title')}</h1>
+          <p className="text-gray-500 mt-1">{t('npofMaterials.subtitle')}</p>
         </div>
         
         {isAdmin && (
@@ -103,7 +105,7 @@ export function NpofMaterials() {
                 className="btn btn-secondary text-red-600 hover:text-red-700 hover:bg-red-50"
               >
                 {bulkDeleteMutation.isPending ? <Loader2 className="w-4 h-4 mr-2 animate-spin" /> : <Trash2 className="w-4 h-4 mr-2" />}
-                Delete Selected ({selectedIds.length})
+                {t('npofMaterials.deleteSelected', { count: selectedIds.length })}
               </button>
             )}
             <button
@@ -116,7 +118,7 @@ export function NpofMaterials() {
               ) : (
                 <RefreshCw className="w-4 h-4 mr-2" />
               )}
-              Sync from NPOF
+              {t('npofMaterials.syncFromNpof')}
             </button>
           </div>
         )}
@@ -128,7 +130,7 @@ export function NpofMaterials() {
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 w-5 h-5" />
             <input
               type="text"
-              placeholder="Search by Part Number, Product Name, Material, Supplier..."
+              placeholder={t('npofMaterials.searchPlaceholder')}
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               className="input pl-10 w-full bg-white"
@@ -136,7 +138,7 @@ export function NpofMaterials() {
           </div>
           
           <div className="flex items-center text-sm text-gray-500 bg-white px-3 py-1.5 rounded-full border border-gray-200 shadow-sm">
-            <span className="font-medium text-gray-900 mr-1">{filteredData.length}</span> records found
+            <span className="font-medium text-gray-900 mr-1">{filteredData.length}</span> {t('npofMaterials.recordsFound')}
           </div>
         </div>
 
@@ -154,17 +156,17 @@ export function NpofMaterials() {
                     />
                   </th>
                 )}
-                <th className="px-4 py-3 font-semibold w-24">NPOF ID</th>
-                <th className="px-4 py-3 font-semibold">Part Number</th>
-                <th className="px-4 py-3 font-semibold">Product Name</th>
-                <th className="px-4 py-3 font-semibold">Material</th>
-                <th className="px-4 py-3 font-semibold">Gramatur</th>
-                <th className="px-4 py-3 font-semibold">Supplier</th>
-                <th className="px-4 py-3 font-semibold">Sheeted Size</th>
-                <th className="px-4 py-3 font-semibold min-w-[200px]">Formula Material</th>
-                <th className="px-4 py-3 font-semibold w-20">UPS</th>
-                <th className="px-4 py-3 font-semibold">Last Updated</th>
-                {isAdmin && <th className="px-4 py-3 font-semibold text-right w-24">Actions</th>}
+                <th className="px-4 py-3 font-semibold w-24">{t('npofMaterials.npofId')}</th>
+                <th className="px-4 py-3 font-semibold">{t('npofMaterials.partNumber')}</th>
+                <th className="px-4 py-3 font-semibold">{t('npofMaterials.productName')}</th>
+                <th className="px-4 py-3 font-semibold">{t('npofMaterials.material')}</th>
+                <th className="px-4 py-3 font-semibold">{t('npofMaterials.gramatur')}</th>
+                <th className="px-4 py-3 font-semibold">{t('npofMaterials.supplier')}</th>
+                <th className="px-4 py-3 font-semibold">{t('npofMaterials.sheetedSize')}</th>
+                <th className="px-4 py-3 font-semibold min-w-[200px]">{t('npofMaterials.formulaMaterial')}</th>
+                <th className="px-4 py-3 font-semibold w-20">{t('npofMaterials.ups')}</th>
+                <th className="px-4 py-3 font-semibold">{t('npofMaterials.lastUpdated')}</th>
+                {isAdmin && <th className="px-4 py-3 font-semibold text-right w-24">{t('common.actions')}</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
@@ -172,7 +174,7 @@ export function NpofMaterials() {
                 <tr>
                   <td colSpan={isAdmin ? 12 : 11} className="px-4 py-8 text-center text-gray-500">
                     <Loader2 className="w-6 h-6 animate-spin mx-auto mb-2 text-indigo-600" />
-                    Loading materials data...
+                    {t('npofMaterials.loading')}
                   </td>
                 </tr>
               ) : filteredData.length === 0 ? (
@@ -182,8 +184,8 @@ export function NpofMaterials() {
                       <div className="w-12 h-12 bg-gray-50 rounded-full flex items-center justify-center mb-3">
                         <AlertCircle className="w-6 h-6 text-gray-400" />
                       </div>
-                      <p className="text-gray-900 font-medium">No materials found</p>
-                      <p className="text-sm mt-1">Try syncing from NPOF or adjusting your search</p>
+                      <p className="text-gray-900 font-medium">{t('npofMaterials.emptyTitle')}</p>
+                      <p className="text-sm mt-1">{t('npofMaterials.emptyHint')}</p>
                     </div>
                   </td>
                 </tr>
@@ -214,15 +216,15 @@ export function NpofMaterials() {
                     <td className="px-4 py-3 text-gray-700 text-center">{item.ups || '-'}</td>
                     
                     <td className="px-4 py-3 text-gray-500">
-                      <div title={item.lastSyncedAt ? format(new Date(item.lastSyncedAt), 'PPpp') : 'Never synced'}>
-                        {item.lastSyncedAt ? format(new Date(item.lastSyncedAt), 'MMM d, HH:mm') : '-'}
+                      <div title={item.lastSyncedAt ? format(new Date(item.lastSyncedAt), 'PPpp', { locale: dateLocale }) : t('common.never')}>
+                        {item.lastSyncedAt ? format(new Date(item.lastSyncedAt), 'MMM d, HH:mm', { locale: dateLocale }) : '-'}
                       </div>
                     </td>
 
                     {isAdmin && (
                       <td className="px-4 py-3 text-right">
                         <div className="flex items-center justify-end gap-2">
-                          <button onClick={() => handleDelete(item.id)} className="p-1 text-red-600 hover:bg-red-50 rounded" title="Delete">
+                          <button onClick={() => handleDelete(item.id)} className="p-1 text-red-600 hover:bg-red-50 rounded" title={t('common.delete')}>
                             <Trash2 className="w-4 h-4" />
                           </button>
                         </div>
