@@ -1,5 +1,5 @@
 import { Outlet, Link, useRouterState, useRouter } from '@tanstack/react-router';
-import { LayoutDashboard, Activity, Users, Bell, LogOut, Settings, CalendarClock, Box, Settings2, CalendarRange, ShieldAlert, FileSpreadsheet, Factory, Package, Database, Menu, Calculator } from 'lucide-react';
+import { LayoutDashboard, Activity, Users, Bell, LogOut, Settings, CalendarClock, Box, Settings2, CalendarRange, ShieldAlert, FileSpreadsheet, Factory, Package, Database, Menu, Calculator, Printer, CalendarDays } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { useAuthStore } from '../../stores/authStore';
 import type { ModuleName } from '../../stores/authStore';
@@ -38,6 +38,8 @@ const SIDEBAR_MENUS: Record<ModuleName, MenuItem[]> = {
     { labelKey: 'layout.menu.itemTracking', path: '/tracking', icon: Activity },
     { labelKey: 'layout.menu.shortageDetail', path: '/shortage-detail', icon: ShieldAlert },
     { labelKey: 'layout.menu.fgInventory', path: '/fg-stock', icon: Box },
+    { labelKey: 'layout.menu.printingPresses', path: '/printing/presses', icon: Printer, badgeKey: 'layout.badge.printing', scope: 'production' },
+    { labelKey: 'layout.menu.printingCalendar', path: '/printing/calendar', icon: CalendarDays, badgeKey: 'layout.badge.printing', scope: 'production' },
   ],
   material: [
     { labelKey: 'layout.menu.materialCalculation', path: '/material-calculation', icon: Calculator, feature: 'materialCalculation' },

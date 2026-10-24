@@ -653,3 +653,89 @@ model MaterialCalcExclusion {
   @@index([cycleId, groupKey])
   @@map("material_calc_exclusions")
 }
+
+// ============================================
+// PRINTING (KBA) — modul Printing Planning
+// ============================================
+// Diintegrasikan dari aplikasi Printing Planning (repo Production-Planning).
+// Spesifikasi mesin (warna, tinta spesial, ukuran min/max) ada di kode
+// `packages/shared/src/printing/machines.ts`; tabel ini hanya menyimpan
+// kapasitas yang boleh diubah planner.
+//
+// Semua waktu printing adalah JAM DINDING WIB yang disimpan apa adanya
+// (07:00 WIB disimpan 07:00:00, tanpa konversi zona) — sama dengan engine
+// planning yang mengolah jam pabrik sebagai UTC agar tidak bergeser.
+
+/// Mesin cetak dan kapasitasnya. `id` = id di PLANNING_MACHINES (kba1..kba4, genius).
+model PrintingMachine {
+  id             String   @id @db.VarChar(20)
+  name           String   @db.VarChar(40)
+  /// Ribu lembar per jam (kolom "unit/hour" GC PRINTING).
+  speed          Float
+  /// Jam setup per job.
+  setupHours     Float    @default(1)
+  /// Jam efektif per hari (24 jam − istirahat shift).
+  effectiveHours Float    @default(22.5)
+  /// Optimistic locking: PUT wajib mengirim versi yang sedang dilihat.
+  version        Int      @default(1)
+  updatedBy      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  maintenance PrintingMaintenance[]
+
+  @@map("printing_machines")
+}
+
+/// Shift pabrik dan istirahatnya. Disimpan sebagai SATU daftar: semua baris
+/// berbagi `version`, dan PUT mengganti seluruh daftar sekaligus.
+model PrintingShift {
+  id         String   @id @default(cuid())
+  sortOrder  Int
+  name       String   @db.VarChar(40)
+  /// "HH:MM"
+  start      String   @db.VarChar(5)
+  end        String   @db.VarChar(5)
+  breakStart String   @db.VarChar(5)
+  breakEnd   String   @db.VarChar(5)
+  version    Int      @default(1)
+  updatedBy  String?
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  @@index([sortOrder])
+  @@map("printing_shifts")
+}
+
+/// Tanggal merah & hari libur pabrik. Setiap plan memilih sendiri apakah tetap
+/// mencetak di hari ini (lihat `workdays` di kalender plan).
+model PrintingHoliday {
+  id        String   @id @default(cuid())
+  date      DateTime @unique @db.Date
+  name      String   @db.VarChar(80)
+  createdBy String?
+  createdAt DateTime @default(now())
+
+  @@map("printing_holidays")
+}
+
+/// Jendela maintenance mesin (jam dinding WIB). Planning tidak menaruh job yang
+/// menabrak jendela ini; job digeser ke setelahnya.
+model PrintingMaintenance {
+  id        String   @id @default(cuid())
+  machineId String   @db.VarChar(20)
+  startAt   DateTime
+  endAt     DateTime
+  reason    String   @db.VarChar(200)
+  version   Int      @default(1)
+  createdBy String?
+  updatedBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  machine PrintingMachine @relation(fields: [machineId], references: [id], onDelete: Restrict)
+
+  @@index([machineId, startAt])
+  @@index([startAt])
+  @@map("printing_maintenance")
+}

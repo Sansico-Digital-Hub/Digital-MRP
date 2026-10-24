@@ -27,11 +27,14 @@ export default {
       outstandingPo: 'Outstanding PO',
       dropdownManagement: 'Dropdown Management',
       userManagement: 'User Management',
+      printingPresses: 'Mesin Cetak',
+      printingCalendar: 'Kalender Printing',
     },
     badge: {
       productionAndMaterial: 'Production & Material',
       production: 'Production',
       material: 'Material',
+      printing: 'Printing (KBA)',
     },
     filterData: 'Filter Data:',
     masterData: {
@@ -70,11 +73,14 @@ export default {
       outstandingPo: 'Outstanding PO',
       dropdownManagement: 'Dropdown Management',
       userManagement: 'User Management',
+      printingPresses: 'Printing Presses',
+      printingCalendar: 'Printing Calendar',
     },
     badge: {
       productionAndMaterial: 'Production & Material',
       production: 'Production',
       material: 'Material',
+      printing: 'Printing (KBA)',
     },
     filterData: 'Filter Data:',
     masterData: {

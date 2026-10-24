@@ -21,6 +21,7 @@ import materialCalcRoutes from './routes/materialCalc';
 import materialPlanningRoutes from './routes/materialPlanning';
 import historyRoutes from './routes/history';
 import fgStockHistoryRoutes from './routes/fgStockHistory';
+import printingRoutes from './routes/printing';
 import { startCleanupSchedule, stopCleanupSchedule } from './lib/cleanup';
 import { bootstrapAdmin } from './lib/bootstrapAdmin';
 import multipart from '@fastify/multipart';
@@ -88,6 +89,7 @@ async function registerPlugins() {
   await server.register(materialPlanningRoutes);
   await server.register(historyRoutes);
   await server.register(fgStockHistoryRoutes);
+  await server.register(printingRoutes);
 }
 
 // Health check route

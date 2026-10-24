@@ -73,6 +73,20 @@ import { StockRawMaterial } from './routes/StockRawMaterial';
 import { OutstandingPO } from './routes/OutstandingPO';
 import { NpofMaterials } from './routes/NpofMaterials';
 import { MaterialCalc } from './routes/MaterialCalc';
+import { PrintingPresses } from './routes/PrintingPresses';
+import { PrintingCalendar } from './routes/PrintingCalendar';
+
+const printingPressesRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: '/printing/presses',
+  component: PrintingPresses,
+});
+
+const printingCalendarRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: '/printing/calendar',
+  component: PrintingCalendar,
+});
 
 const materialCalcRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
@@ -168,6 +182,8 @@ const routeTree = rootRoute.addChildren([
     outstandingPoRoute,
     npofMaterialsRoute,
     materialCalcRoute,
+    printingPressesRoute,
+    printingCalendarRoute,
   ]),
 ]);
 

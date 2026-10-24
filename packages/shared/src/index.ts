@@ -9,3 +9,6 @@ export * from './schemas/stock.schema';
 
 // Utils
 export * from './utils/calculateStatus';
+
+// Modul Printing (KBA)
+export * from './printing';
