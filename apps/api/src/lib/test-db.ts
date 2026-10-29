@@ -75,7 +75,7 @@ async function testDatabase() {
 
     console.log('\n📊 Items with stock and schedules:');
     itemsWithStock.forEach((item) => {
-      console.log(`\n${item.itemName} (${item.itemCode}):`);
+      console.log(`\n${item.itemName} (${item.partNumber}):`);
       console.log(`  - FG Stock: ${item.fgStocks.length} records`);
       console.log(`  - WIP: ${item.wips.length} records`);
       console.log(`  - Daily Schedules: ${item.dailySchedules.length} records`);

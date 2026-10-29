@@ -6,6 +6,7 @@ import { Calendar, Plus, Save, Upload, Trash2, Search, Edit2, Layers, Package, C
 // import { format } from 'date-fns';
 import * as XLSX from 'xlsx';
 import { useAuthStore } from '../stores/authStore';
+import { useTranslation } from '../i18n';
 
 interface ImportRecord {
   id: string;
@@ -404,8 +405,10 @@ function parseFAAttachSheet(ws: XLSX.WorkSheet): ImportRecord[] {
 }
 
 export function DailySchedule() {
-  const { user } = useAuthStore();
-  const isAdmin = user?.role === 'SUPER_ADMIN' || user?.role === 'ADMIN';
+  const { t, locale } = useTranslation();
+  const { canEdit } = useAuthStore();
+  // Production Planner & Admin boleh edit; Material Planner / User view-only.
+  const isAdmin = canEdit('production');
   
   const [filterDate, setFilterDate] = useState(() => {
     const d = new Date();
@@ -450,8 +453,8 @@ export function DailySchedule() {
       if (filterShift && s.shift !== Number(filterShift)) return false;
       if (!searchQuery) return true;
       const q = searchQuery.toLowerCase();
-      return s.item.partNumber.toLowerCase().includes(q) ||
-             s.item.description.toLowerCase().includes(q) ||
+            return s.item.partNumber.toLowerCase().includes(q) ||
+              s.item.itemName.toLowerCase().includes(q) ||
              (s.toyName && s.toyName.toLowerCase().includes(q)) ||
              (s.masterCarton && s.masterCarton.toLowerCase().includes(q)) ||
              s.date.toLowerCase().includes(q) ||
@@ -473,7 +476,7 @@ export function DailySchedule() {
           id: key,
           date: dateStr,
           partNumber: schedule.item.partNumber,
-          toyName: schedule.toyName || schedule.item.description,
+          toyName: schedule.toyName || schedule.item.itemName,
           masterCarton: schedule.masterCarton || '-',
           shift1: { id: null, quantity: 0 },
           shift2: { id: null, quantity: 0 },
@@ -502,9 +505,9 @@ export function DailySchedule() {
     if (!editModal.data) return;
     try {
       const records = [];
-      if (editModal.data.shift1Qty > 0) records.push({ date: editModal.data.date, shift: 1, partNumber: editModal.data.partNumber, toyName: editModal.data.toyName, masterCarton: editModal.data.masterCarton === '-' ? '' : editModal.data.masterCarton, quantity: editModal.data.shift1Qty });
-      if (editModal.data.shift2Qty > 0) records.push({ date: editModal.data.date, shift: 2, partNumber: editModal.data.partNumber, toyName: editModal.data.toyName, masterCarton: editModal.data.masterCarton === '-' ? '' : editModal.data.masterCarton, quantity: editModal.data.shift2Qty });
-      if (editModal.data.shift3Qty > 0) records.push({ date: editModal.data.date, shift: 3, partNumber: editModal.data.partNumber, toyName: editModal.data.toyName, masterCarton: editModal.data.masterCarton === '-' ? '' : editModal.data.masterCarton, quantity: editModal.data.shift3Qty });
+      if (editModal.data.shift1Qty > 0) records.push({ date: editModal.data.date, shift: 1, itemCode: editModal.data.partNumber, toyName: editModal.data.toyName, masterCarton: editModal.data.masterCarton === '-' ? '' : editModal.data.masterCarton, quantity: editModal.data.shift1Qty });
+      if (editModal.data.shift2Qty > 0) records.push({ date: editModal.data.date, shift: 2, itemCode: editModal.data.partNumber, toyName: editModal.data.toyName, masterCarton: editModal.data.masterCarton === '-' ? '' : editModal.data.masterCarton, quantity: editModal.data.shift2Qty });
+      if (editModal.data.shift3Qty > 0) records.push({ date: editModal.data.date, shift: 3, itemCode: editModal.data.partNumber, toyName: editModal.data.toyName, masterCarton: editModal.data.masterCarton === '-' ? '' : editModal.data.masterCarton, quantity: editModal.data.shift3Qty });
 
       if (editModal.data.ids && editModal.data.ids.length > 0) {
         await bulkDeleteSchedule.mutateAsync({ ids: editModal.data.ids });
@@ -514,27 +517,27 @@ export function DailySchedule() {
       }
       setEditModal({ isOpen: false, data: null });
     } catch (err: any) {
-      alert(err.message || 'Failed to update schedule');
+      alert(err.message || t('dailySchedule.failedUpdate'));
     }
   };
 
   const handleDelete = async (ids: string[]) => {
-    if (!confirm('Are you sure you want to delete this record?')) return;
+    if (!confirm(t('dailySchedule.confirmDeleteOne'))) return;
     try {
       await bulkDeleteSchedule.mutateAsync({ ids });
     } catch (err: any) {
-      alert(err.message || 'Failed to delete schedule');
+      alert(err.message || t('dailySchedule.failedDelete'));
     }
   };
 
   const handleDeleteSelected = async () => {
     if (selectedIds.length === 0) return;
-    if (!confirm(`Are you sure you want to delete ${selectedIds.length} selected records?`)) return;
+    if (!confirm(t('dailySchedule.confirmDeleteMany', { count: selectedIds.length }))) return;
     try {
       await bulkDeleteSchedule.mutateAsync({ ids: selectedIds });
       setSelectedIds([]);
     } catch (err: any) {
-      alert(err.message || 'Failed to delete records');
+      alert(err.message || t('dailySchedule.failedDeleteRecords'));
     }
   };
 
@@ -552,7 +555,7 @@ export function DailySchedule() {
   const handleSubmit = async (e: React.FormEvent, saveMode: 'overwrite' | 'add') => {
     e.preventDefault();
     if (!formData.partNumber) {
-      alert("Please select or enter a Part Number");
+      alert(t('dailySchedule.partNumberRequired'));
       return;
     }
     try {
@@ -560,7 +563,7 @@ export function DailySchedule() {
         records: [{
           date: formData.date,
           shift: Number(formData.shift),
-          partNumber: formData.partNumber,
+          itemCode: formData.partNumber,
           toyName: formData.toyName,
           masterCarton: formData.masterCarton,
           quantity: Number(formData.quantity),
@@ -570,7 +573,7 @@ export function DailySchedule() {
       setShowForm(false);
       setFormData(prev => ({ ...prev, partNumber: '', toyName: '', masterCarton: '', quantity: 100 }));
     } catch (err: any) {
-      alert(err.message || 'Failed to save schedule');
+      alert(err.message || t('dailySchedule.failedSave'));
     }
   };
 
@@ -621,19 +624,14 @@ export function DailySchedule() {
         }
 
         if (parsed.length === 0) {
-          alert(
-            'Could not parse the Excel file.\n\n' +
-            'Supported formats:\n' +
-            '1. Flat table with columns: Toy Name, Master Carton, Part Number, Date, Shift 1, Shift 2, Shift 3\n' +
-            '2. FA_Attach pivot sheet from NEXT Week Daily Production Schedule.xlsm'
-          );
+          alert(t('dailySchedule.parseError'));
           return;
         }
 
         setImportData(parsed);
       } catch (err) {
         console.error('Excel parse error:', err);
-        alert('Failed to parse Excel file. Please check the file format.');
+        alert(t('dailySchedule.parseFailed'));
       }
     };
     reader.readAsBinaryString(file);
@@ -647,7 +645,7 @@ export function DailySchedule() {
         records: importData.map(r => ({
           date: r.date,
           shift: r.shift,
-          partNumber: r.partNumber,
+          itemCode: r.partNumber,
           toyName: r.toyName,
           masterCarton: r.masterCarton,
           quantity: r.quantity,
@@ -656,9 +654,9 @@ export function DailySchedule() {
       });
       setShowImportModal(false);
       setImportData([]);
-      alert(`Successfully imported ${importData.length} schedule records!`);
+      alert(t('dailySchedule.importSuccess', { count: importData.length }));
     } catch (err: any) {
-      alert(err.message || 'Failed to bulk import Daily Schedule');
+      alert(err.message || t('dailySchedule.failedBulkImport'));
     }
   };
 
@@ -709,8 +707,8 @@ export function DailySchedule() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h2 className="text-2xl font-bold tracking-tight">Daily Demand Schedule</h2>
-          <p className="text-muted-foreground text-sm">Manage daily production demand requirements.</p>
+          <h2 className="text-2xl font-bold tracking-tight">{t('dailySchedule.title')}</h2>
+          <p className="text-muted-foreground text-sm">{t('dailySchedule.subtitle')}</p>
         </div>
         <div className="flex items-center gap-3">
           <input 
@@ -725,7 +723,7 @@ export function DailySchedule() {
               className="bg-secondary text-secondary-foreground border hover:bg-secondary/80 px-4 py-2 rounded-md font-medium text-sm flex items-center space-x-2 transition-colors"
             >
               <Upload size={16} />
-              <span>Import Data</span>
+              <span>{t('dailySchedule.importData')}</span>
             </button>
           )}
           {isAdmin && (
@@ -734,7 +732,7 @@ export function DailySchedule() {
               className="bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 rounded-md font-medium text-sm flex items-center space-x-2 transition-colors"
             >
               <Plus size={16} />
-              <span>Add Demand</span>
+              <span>{t('dailySchedule.addDemand')}</span>
             </button>
           )}
         </div>
@@ -744,12 +742,12 @@ export function DailySchedule() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-card text-card-foreground border rounded-lg p-6 shadow-sm flex justify-between items-start">
           <div className="space-y-2">
-            <p className="text-sm font-medium text-muted-foreground">Running Items</p>
+            <p className="text-sm font-medium text-muted-foreground">{t('dailySchedule.runningItems')}</p>
             <h3 className="text-3xl font-bold tracking-tight text-blue-600 dark:text-blue-400">
               {groupedSchedules.length}
             </h3>
             <p className="text-xs text-muted-foreground">
-              Unique items scheduled for production on this date.
+              {t('dailySchedule.runningItemsDesc')}
             </p>
           </div>
           <div className="p-2 bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 rounded-md">
@@ -759,12 +757,12 @@ export function DailySchedule() {
 
         <div className="bg-card text-card-foreground border rounded-lg p-6 shadow-sm flex justify-between items-start">
           <div className="space-y-2">
-            <p className="text-sm font-medium text-muted-foreground">Total Demand Qty</p>
+            <p className="text-sm font-medium text-muted-foreground">{t('dailySchedule.totalDemandQty')}</p>
             <h3 className="text-3xl font-bold tracking-tight text-green-600 dark:text-green-400">
-              {groupedSchedules.reduce((acc, g) => acc + g.total, 0).toLocaleString()}
+              {groupedSchedules.reduce((acc, g) => acc + g.total, 0).toLocaleString(locale)}
             </h3>
             <p className="text-xs text-muted-foreground">
-              Total quantity demanded across all shifts and items.
+              {t('dailySchedule.totalDemandQtyDesc')}
             </p>
           </div>
           <div className="p-2 bg-green-50 dark:bg-green-950 text-green-600 dark:text-green-400 rounded-md">
@@ -774,31 +772,31 @@ export function DailySchedule() {
 
         <div className="bg-card text-card-foreground border rounded-lg p-6 shadow-sm flex justify-between items-start">
           <div className="space-y-2 w-full">
-            <p className="text-sm font-medium text-muted-foreground">Shift Breakdown</p>
+            <p className="text-sm font-medium text-muted-foreground">{t('dailySchedule.shiftBreakdown')}</p>
             <div className="flex justify-between items-center pt-1">
               <div>
-                <span className="text-xs text-muted-foreground block">Shift 1</span>
+                <span className="text-xs text-muted-foreground block">{t('dailySchedule.shift1')}</span>
                 <span className="text-lg font-bold text-red-500">
-                  {groupedSchedules.reduce((acc, g) => acc + g.shift1.quantity, 0).toLocaleString()}
+                  {groupedSchedules.reduce((acc, g) => acc + g.shift1.quantity, 0).toLocaleString(locale)}
                 </span>
               </div>
               <div className="border-l h-8 mx-2" />
               <div>
-                <span className="text-xs text-muted-foreground block">Shift 2</span>
+                <span className="text-xs text-muted-foreground block">{t('dailySchedule.shift2')}</span>
                 <span className="text-lg font-bold text-red-500">
-                  {groupedSchedules.reduce((acc, g) => acc + g.shift2.quantity, 0).toLocaleString()}
+                  {groupedSchedules.reduce((acc, g) => acc + g.shift2.quantity, 0).toLocaleString(locale)}
                 </span>
               </div>
               <div className="border-l h-8 mx-2" />
               <div>
-                <span className="text-xs text-muted-foreground block">Shift 3</span>
+                <span className="text-xs text-muted-foreground block">{t('dailySchedule.shift3')}</span>
                 <span className="text-lg font-bold text-red-500">
-                  {groupedSchedules.reduce((acc, g) => acc + g.shift3.quantity, 0).toLocaleString()}
+                  {groupedSchedules.reduce((acc, g) => acc + g.shift3.quantity, 0).toLocaleString(locale)}
                 </span>
               </div>
             </div>
             <p className="text-xs text-muted-foreground">
-              Quantity distribution across the three daily shifts.
+              {t('dailySchedule.shiftBreakdownDesc')}
             </p>
           </div>
           <div className="p-2 bg-red-50 dark:bg-red-950 text-red-500 rounded-md self-start">
@@ -810,24 +808,24 @@ export function DailySchedule() {
       {showForm && (
         <div className="bg-card text-card-foreground border rounded-lg p-6 shadow-sm">
           <h3 className="font-semibold mb-4 flex items-center gap-2">
-            <Calendar size={18} /> Record Daily Schedule
+            <Calendar size={18} /> {t('dailySchedule.recordSchedule')}
           </h3>
-          <p className="text-xs text-muted-foreground mb-4">Note: Use "Save Add" to add to existing quantity, or "Save Overwrite" to replace it entirely.</p>
+          <p className="text-xs text-muted-foreground mb-4">{t('dailySchedule.recordNote')}</p>
           
           <form className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-6 gap-4 items-end">
             <div className="space-y-2">
-              <label className="text-sm font-medium">Toy Name</label>
+              <label className="text-sm font-medium">{t('dailySchedule.toyName')}</label>
               <SearchableSelect
-                options={items.filter((item: any) => item.partNumber !== item.description).map((item: any) => ({ value: item.description, label: item.description }))}
+                options={items.filter((item: any) => item.itemCode !== item.itemName).map((item: any) => ({ value: item.itemName, label: item.itemName }))}
                 value={formData.toyName}
                 onChange={val => setFormData({...formData, toyName: val})}
                 onAdd={(search) => setFormData({...formData, toyName: search})}
-                placeholder="Select or enter Toy Name..."
+                placeholder={t('dailySchedule.selectOrEnterToyName')}
               />
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium">Master Carton</label>
+              <label className="text-sm font-medium">{t('dailySchedule.masterCarton')}</label>
               <SearchableSelect
                 options={masterCartons.map((mc: any) => ({ value: mc.cartonCode, label: mc.cartonCode }))}
                 value={formData.masterCarton}
@@ -835,29 +833,29 @@ export function DailySchedule() {
                   const mc = masterCartons.find((m: any) => m.cartonCode === val);
                   if (mc) {
                     const matchedToy = items.find((i: any) => i.id === mc.toyNameItemId);
-                    setFormData({...formData, masterCarton: val, partNumber: mc.partNumberCode, toyName: matchedToy ? matchedToy.description : formData.toyName});
+                    setFormData({...formData, masterCarton: val, partNumber: mc.partNumberCode, toyName: matchedToy ? matchedToy.itemName : formData.toyName});
                   } else {
                     setFormData({...formData, masterCarton: val});
                   }
                 }}
                 onAdd={(search) => setFormData({...formData, masterCarton: search})}
-                placeholder="Select or enter Master Carton..."
+                placeholder={t('dailySchedule.selectOrEnterMasterCarton')}
               />
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium">Part Number</label>
+              <label className="text-sm font-medium">{t('dailySchedule.partNumber')}</label>
               <SearchableSelect
-                options={items.map((item: any) => ({ value: item.partNumber, label: item.partNumber }))}
+                options={items.map((item: any) => ({ value: item.itemCode, label: item.itemCode }))}
                 value={formData.partNumber}
                 onChange={val => setFormData({...formData, partNumber: val})}
                 onAdd={(search) => setFormData({...formData, partNumber: search})}
-                placeholder="Select or enter Part Number..."
+                placeholder={t('dailySchedule.selectOrEnterPartNumber')}
               />
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium">Date</label>
+              <label className="text-sm font-medium">{t('common.date')}</label>
               <input 
                 type="date" required
                 className="w-full h-10 px-3 border rounded-md bg-background"
@@ -866,19 +864,19 @@ export function DailySchedule() {
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium">Shift</label>
+              <label className="text-sm font-medium">{t('dailySchedule.shift')}</label>
               <select 
                 className="w-full h-10 px-3 border rounded-md bg-background"
                 value={formData.shift} onChange={e => setFormData({...formData, shift: Number(e.target.value)})}
               >
-                <option value={1}>Shift 1</option>
-                <option value={2}>Shift 2</option>
-                <option value={3}>Shift 3</option>
+                <option value={1}>{t('dailySchedule.shift1')}</option>
+                <option value={2}>{t('dailySchedule.shift2')}</option>
+                <option value={3}>{t('dailySchedule.shift3')}</option>
               </select>
             </div>
 
             <div className="space-y-2">
-              <label className="text-sm font-medium">Quantity Required</label>
+              <label className="text-sm font-medium">{t('dailySchedule.quantityRequired')}</label>
               <input 
                 type="number" required min="1"
                 className="w-full h-10 px-3 border rounded-md bg-background"
@@ -887,14 +885,14 @@ export function DailySchedule() {
             </div>
             
             <div className="md:col-span-2 lg:col-span-6 flex justify-end gap-3 mt-4">
-              <button type="button" onClick={() => setShowForm(false)} className="h-10 border px-6 rounded-md font-medium hover:bg-muted transition-colors">Cancel</button>
+              <button type="button" onClick={() => setShowForm(false)} className="h-10 border px-6 rounded-md font-medium hover:bg-muted transition-colors">{t('common.cancel')}</button>
               <button 
                 type="button" 
                 onClick={(e) => handleSubmit(e, 'add')} 
                 disabled={upsertSchedule.isPending} 
                 className="h-10 bg-green-600 hover:bg-green-700 text-white px-6 rounded-md font-medium flex items-center gap-2 transition-colors"
               >
-                <Plus size={16} /> {upsertSchedule.isPending ? 'Saving...' : 'Save Add'}
+                <Plus size={16} /> {upsertSchedule.isPending ? t('dailySchedule.saving') : t('dailySchedule.saveAdd')}
               </button>
               <button 
                 type="button" 
@@ -902,7 +900,7 @@ export function DailySchedule() {
                 disabled={upsertSchedule.isPending} 
                 className="h-10 bg-primary text-primary-foreground hover:bg-primary/90 px-6 rounded-md font-medium flex items-center gap-2 transition-colors"
               >
-                <Save size={16} /> {upsertSchedule.isPending ? 'Saving...' : 'Save Overwrite'}
+                <Save size={16} /> {upsertSchedule.isPending ? t('dailySchedule.saving') : t('dailySchedule.saveOverwrite')}
               </button>
             </div>
           </form>
@@ -918,14 +916,14 @@ export function DailySchedule() {
               className="bg-red-600 hover:bg-red-700 text-white px-3 py-1.5 rounded-md font-medium text-sm flex items-center space-x-2 transition-colors mr-2"
             >
               <Trash2 size={16} />
-              <span>Delete Selected ({selectedIds.length})</span>
+              <span>{t('dailySchedule.deleteSelected', { count: selectedIds.length })}</span>
             </button>
           )}
           <div className="relative max-w-sm flex-1 min-w-[200px]">
             <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
             <input 
               type="text"
-              placeholder="Search Part Number or Toy Name..."
+              placeholder={t('dailySchedule.searchPlaceholder')}
               className="w-full h-9 pl-9 pr-3 border rounded-md bg-background text-sm"
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
@@ -936,10 +934,10 @@ export function DailySchedule() {
             value={filterShift}
             onChange={(e) => setFilterShift(e.target.value)}
           >
-            <option value="">All Shifts</option>
-            <option value="1">Shift 1</option>
-            <option value="2">Shift 2</option>
-            <option value="3">Shift 3</option>
+            <option value="">{t('dailySchedule.allShifts')}</option>
+            <option value="1">{t('dailySchedule.shift1')}</option>
+            <option value="2">{t('dailySchedule.shift2')}</option>
+            <option value="3">{t('dailySchedule.shift3')}</option>
           </select>
         </div>
         <div className="overflow-x-auto">
@@ -951,22 +949,22 @@ export function DailySchedule() {
                     <input type="checkbox" checked={allFilteredSelected} onChange={handleSelectAll} className="rounded border-gray-300" />
                   </th>
                 )}
-                <th className="px-6 py-3">Toy Name</th>
-                <th className="px-6 py-3">Master Carton</th>
-                <th className="px-6 py-3">Part Number</th>
-                <th className="px-6 py-3">Date</th>
-                <th className="px-6 py-3 text-right">Shift 1</th>
-                <th className="px-6 py-3 text-right">Shift 2</th>
-                <th className="px-6 py-3 text-right">Shift 3</th>
-                <th className="px-6 py-3 text-right">Target Demand</th>
-                {isAdmin && <th className="px-6 py-3 text-center">Actions</th>}
+                <th className="px-6 py-3">{t('dailySchedule.toyName')}</th>
+                <th className="px-6 py-3">{t('dailySchedule.masterCarton')}</th>
+                <th className="px-6 py-3">{t('dailySchedule.partNumber')}</th>
+                <th className="px-6 py-3">{t('common.date')}</th>
+                <th className="px-6 py-3 text-right">{t('dailySchedule.shift1')}</th>
+                <th className="px-6 py-3 text-right">{t('dailySchedule.shift2')}</th>
+                <th className="px-6 py-3 text-right">{t('dailySchedule.shift3')}</th>
+                <th className="px-6 py-3 text-right">{t('dailySchedule.targetDemand')}</th>
+                {isAdmin && <th className="px-6 py-3 text-center">{t('common.actions')}</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-border">
               {loadingSchedules ? (
-                <tr><td colSpan={isAdmin ? 10 : 8} className="p-8 text-center">Loading...</td></tr>
+                <tr><td colSpan={isAdmin ? 10 : 8} className="p-8 text-center">{t('common.loading')}</td></tr>
               ) : groupedSchedules.length === 0 ? (
-                <tr><td colSpan={isAdmin ? 10 : 8} className="p-8 text-center text-muted-foreground">No demand scheduled.</td></tr>
+                <tr><td colSpan={isAdmin ? 10 : 8} className="p-8 text-center text-muted-foreground">{t('dailySchedule.noDemand')}</td></tr>
               ) : (
                 groupedSchedules.map((group: any) => (
                   <tr key={group.id} className="hover:bg-muted/50 transition-colors">
@@ -1013,14 +1011,14 @@ export function DailySchedule() {
                               }
                             })}
                             className="p-1.5 text-blue-500 hover:bg-blue-50 dark:hover:bg-blue-950 rounded-md transition-colors"
-                            title="Edit Record"
+                            title={t('dailySchedule.editRecord')}
                           >
                             <Edit2 size={16} />
                           </button>
                           <button
                             onClick={() => handleDelete(group.ids)}
                             className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950 rounded-md transition-colors"
-                            title="Delete Record"
+                            title={t('dailySchedule.deleteRecord')}
                           >
                             <Trash2 size={16} />
                           </button>
@@ -1040,18 +1038,18 @@ export function DailySchedule() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
           <div className="bg-card text-card-foreground border rounded-lg shadow-lg max-w-5xl w-full max-h-[90vh] flex flex-col">
             <div className="flex justify-between items-center p-6 border-b">
-              <h3 className="text-xl font-bold flex items-center gap-2"><Upload size={20} /> Import Daily Schedule</h3>
+              <h3 className="text-xl font-bold flex items-center gap-2"><Upload size={20} /> {t('dailySchedule.importDailySchedule')}</h3>
               <button onClick={() => { setShowImportModal(false); setImportData([]); }} className="text-muted-foreground hover:text-foreground text-lg">✕</button>
             </div>
             
             <div className="p-6 flex-1 overflow-auto space-y-4">
               <div className="space-y-2">
                 <p className="text-sm text-muted-foreground">
-                  Upload a Daily Schedule Excel file (.xlsx / .xlsm). Two formats are supported:
+                  {t('dailySchedule.importHint')}
                 </p>
                 <ul className="text-xs text-muted-foreground list-disc pl-5 space-y-1">
-                  <li><strong>Flat table</strong> — columns: <em>Toy Name, Master Carton, Part Number, Date, Shift 1, Shift 2, Shift 3</em> (e.g. DailySchedule.xlsx)</li>
-                  <li><strong>FA_Attach pivot</strong> — date headers in row 2, shift sub-headers in row 3 (e.g. NEXT Week Daily Production Schedule.xlsm)</li>
+                  <li><strong>{t('dailySchedule.importFlatLabel')}</strong>{t('dailySchedule.importFlatPrefix')}<em>{t('dailySchedule.importFlatColumns')}</em>{t('dailySchedule.importFlatSuffix')}</li>
+                  <li><strong>{t('dailySchedule.importPivotLabel')}</strong>{t('dailySchedule.importPivotDesc')}</li>
                 </ul>
                 <input 
                   type="file" 
@@ -1067,30 +1065,30 @@ export function DailySchedule() {
                   <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
                     <div className="bg-muted/30 rounded-lg p-3 text-center">
                       <div className="text-2xl font-bold text-primary">{importData.length}</div>
-                      <div className="text-xs text-muted-foreground">Total Records</div>
+                      <div className="text-xs text-muted-foreground">{t('dailySchedule.totalRecords')}</div>
                     </div>
                     <div className="bg-muted/30 rounded-lg p-3 text-center">
                       <div className="text-2xl font-bold text-green-600">{importSummary.uniqueParts.size}</div>
-                      <div className="text-xs text-muted-foreground">Unique Parts</div>
+                      <div className="text-xs text-muted-foreground">{t('dailySchedule.uniqueParts')}</div>
                     </div>
                     <div className="bg-muted/30 rounded-lg p-3 text-center">
                       <div className="text-2xl font-bold text-blue-600">{importSummary.dates.size}</div>
-                      <div className="text-xs text-muted-foreground">Days</div>
+                      <div className="text-xs text-muted-foreground">{t('dailySchedule.days')}</div>
                     </div>
                     <div className="bg-muted/30 rounded-lg p-3 text-center">
                       <div className="text-2xl font-bold text-orange-600">{Math.round(importSummary.totalQty * 100) / 100}</div>
-                      <div className="text-xs text-muted-foreground">Total Quantity</div>
+                      <div className="text-xs text-muted-foreground">{t('dailySchedule.totalQuantity')}</div>
                     </div>
                   </div>
 
                   {/* Search */}
                   <div className="flex justify-between items-center">
-                    <span className="font-medium text-sm">{filteredImportData.length} of {importData.length} records shown</span>
+                    <span className="font-medium text-sm">{t('dailySchedule.recordsShown', { shown: filteredImportData.length, total: importData.length })}</span>
                     <div className="relative w-72">
                       <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
                       <input 
                         type="text" 
-                        placeholder="Search by Part Number, Toy Name, Date..." 
+                        placeholder={t('dailySchedule.importSearchPlaceholder')} 
                         className="w-full h-9 pl-9 pr-4 text-sm border rounded-md bg-background focus:outline-none focus:ring-2 focus:ring-primary/20"
                         value={importSearch}
                         onChange={e => setImportSearch(e.target.value)}
@@ -1103,15 +1101,15 @@ export function DailySchedule() {
                     <table className="w-full text-sm text-left">
                       <thead className="bg-muted text-muted-foreground text-xs uppercase font-medium sticky top-0">
                         <tr>
-                          <th className="px-4 py-3">Toy Name</th>
-                          <th className="px-4 py-3">Master Carton</th>
-                          <th className="px-4 py-3">Part Number</th>
-                          <th className="px-4 py-3">Date</th>
-                          <th className="px-4 py-3 text-right">Shift 1</th>
-                          <th className="px-4 py-3 text-right">Shift 2</th>
-                          <th className="px-4 py-3 text-right">Shift 3</th>
-                          <th className="px-4 py-3 text-right">Target Demand</th>
-                          <th className="px-4 py-3 text-center w-16">Action</th>
+                          <th className="px-4 py-3">{t('dailySchedule.toyName')}</th>
+                          <th className="px-4 py-3">{t('dailySchedule.masterCarton')}</th>
+                          <th className="px-4 py-3">{t('dailySchedule.partNumber')}</th>
+                          <th className="px-4 py-3">{t('common.date')}</th>
+                          <th className="px-4 py-3 text-right">{t('dailySchedule.shift1')}</th>
+                          <th className="px-4 py-3 text-right">{t('dailySchedule.shift2')}</th>
+                          <th className="px-4 py-3 text-right">{t('dailySchedule.shift3')}</th>
+                          <th className="px-4 py-3 text-right">{t('dailySchedule.targetDemand')}</th>
+                          <th className="px-4 py-3 text-center w-16">{t('common.action')}</th>
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border">
@@ -1159,7 +1157,7 @@ export function DailySchedule() {
                                     setImportData(importData.filter(r => !toDelete.has(r.id)));
                                   }}
                                   className="p-1.5 text-red-500 hover:bg-red-50 dark:hover:bg-red-950 rounded-md transition-colors"
-                                  title="Delete Record"
+                                  title={t('dailySchedule.deleteRecord')}
                                 >
                                   <Trash2 size={16} />
                                 </button>
@@ -1179,21 +1177,21 @@ export function DailySchedule() {
                 onClick={() => { setShowImportModal(false); setImportData([]); }}
                 className="h-10 border px-6 rounded-md font-medium hover:bg-muted text-sm transition-colors"
               >
-                Cancel
+                {t('common.cancel')}
               </button>
               <button 
                 onClick={() => handleBulkSubmit('add')} 
                 disabled={bulkUpsertSchedule.isPending || importData.length === 0} 
                 className="h-10 bg-green-600 hover:bg-green-700 text-white px-6 rounded-md font-medium flex items-center gap-2 disabled:opacity-50 text-sm transition-colors"
               >
-                <Plus size={16} /> {bulkUpsertSchedule.isPending ? 'Saving...' : 'Save (Add)'}
+                <Plus size={16} /> {bulkUpsertSchedule.isPending ? t('dailySchedule.saving') : t('dailySchedule.saveAddParen')}
               </button>
               <button 
                 onClick={() => handleBulkSubmit('overwrite')} 
                 disabled={bulkUpsertSchedule.isPending || importData.length === 0} 
                 className="h-10 bg-slate-900 dark:bg-slate-800 hover:bg-slate-800 dark:hover:bg-slate-700 text-white px-6 rounded-md font-medium flex items-center gap-2 disabled:opacity-50 text-sm transition-colors"
               >
-                <Save size={16} /> {bulkUpsertSchedule.isPending ? 'Saving...' : 'Save Overwrite'}
+                <Save size={16} /> {bulkUpsertSchedule.isPending ? t('dailySchedule.saving') : t('dailySchedule.saveOverwrite')}
               </button>
             </div>
           </div>
@@ -1204,7 +1202,7 @@ export function DailySchedule() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
           <div className="bg-card text-card-foreground border rounded-lg shadow-lg max-w-md w-full p-6 space-y-4">
             <div className="flex justify-between items-center">
-              <h3 className="text-lg font-bold">Edit Daily Schedule</h3>
+              <h3 className="text-lg font-bold">{t('dailySchedule.editDailySchedule')}</h3>
               <button 
                 type="button" 
                 onClick={() => setEditModal({ isOpen: false, data: null })}
@@ -1215,16 +1213,16 @@ export function DailySchedule() {
             </div>
             <form onSubmit={handleEditSubmit} className="space-y-4">
               <div className="space-y-2">
-                <label className="text-sm font-medium text-muted-foreground">Part Number</label>
+                <label className="text-sm font-medium text-muted-foreground">{t('dailySchedule.partNumber')}</label>
                 <div className="font-semibold">
                   {editModal.data.partNumber === editModal.data.masterCarton ? '' : `${editModal.data.partNumber} - `}
                   {editModal.data.toyName}
                 </div>
-                <div className="text-sm text-muted-foreground">Date: {editModal.data.date}</div>
+                <div className="text-sm text-muted-foreground">{t('dailySchedule.dateValue', { date: editModal.data.date })}</div>
               </div>
               <div className="grid grid-cols-3 gap-4">
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Shift 1</label>
+                  <label className="text-sm font-medium">{t('dailySchedule.shift1')}</label>
                   <input 
                     type="number" min="0"
                     className="w-full h-10 px-3 border rounded-md bg-background"
@@ -1232,7 +1230,7 @@ export function DailySchedule() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Shift 2</label>
+                  <label className="text-sm font-medium">{t('dailySchedule.shift2')}</label>
                   <input 
                     type="number" min="0"
                     className="w-full h-10 px-3 border rounded-md bg-background"
@@ -1240,7 +1238,7 @@ export function DailySchedule() {
                   />
                 </div>
                 <div className="space-y-2">
-                  <label className="text-sm font-medium">Shift 3</label>
+                  <label className="text-sm font-medium">{t('dailySchedule.shift3')}</label>
                   <input 
                     type="number" min="0"
                     className="w-full h-10 px-3 border rounded-md bg-background"
@@ -1249,9 +1247,9 @@ export function DailySchedule() {
                 </div>
               </div>
               <div className="flex justify-end gap-3 pt-4">
-                <button type="button" onClick={() => setEditModal({ isOpen: false, data: null })} className="h-10 border px-4 rounded-md font-medium hover:bg-muted transition-colors">Cancel</button>
+                <button type="button" onClick={() => setEditModal({ isOpen: false, data: null })} className="h-10 border px-4 rounded-md font-medium hover:bg-muted transition-colors">{t('common.cancel')}</button>
                 <button type="submit" disabled={bulkUpsertSchedule.isPending} className="h-10 bg-primary text-primary-foreground hover:bg-primary/90 px-4 rounded-md font-medium flex items-center gap-2 transition-colors">
-                  <Save size={16} /> {bulkUpsertSchedule.isPending ? 'Saving...' : 'Save Changes'}
+                  <Save size={16} /> {bulkUpsertSchedule.isPending ? t('dailySchedule.saving') : t('dailySchedule.saveChanges')}
                 </button>
               </div>
             </form>

@@ -1,0 +1,119 @@
+# ============================================================================
+# docker-compose.dokploy.yml
+#
+# Untuk deploy di Dokploy (mode "Docker Compose").
+# Di Dokploy: isi field "Compose Path" dengan: docker-compose.dokploy.yml
+#
+# Catatan penting soal Dokploy:
+#   - Variabel dari tab Environment ditulis ke file .env, TIDAK otomatis
+#     disuntikkan ke container. Karena itu di bawah ini dipakai ${VAR}
+#     supaya Compose yang menyuntikkannya.
+#   - JANGAN pakai `container_name`. Dokploy butuh nama container yang
+#     dikelolanya sendiri, kalau tidak logs & metrics-nya rusak.
+#   - Volume wajib named volume. Folder repo di-clone ulang setiap deploy,
+#     jadi bind mount ke path repo akan kehilangan data.
+#   - Port tidak dipublikasikan ke host; Traefik (dokploy-network) yang
+#     mengarahkan domain ke service. Tambahkan domain lewat UI Dokploy.
+# ============================================================================
+
+services:
+  mysql:
+    image: mysql:8.0
+    restart: unless-stopped
+    environment:
+      MYSQL_DATABASE: ${MYSQL_DATABASE:-planner_project}
+      MYSQL_USER: ${MYSQL_USER:-pdits}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+    volumes:
+      - mysql_data:/var/lib/mysql
+    networks:
+      - dokploy-network
+    healthcheck:
+      # Pakai kredensial root supaya mysqladmin benar-benar menguji koneksi,
+      # bukan sekadar "proses hidup".
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-u", "root", "-p${MYSQL_ROOT_PASSWORD}"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 30s
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    # Redis hanya dipakai internal, jadi jangan dipublikasikan ke host.
+    # Kalau butuh akses luar, pakai jaringan internal bukan port publik.
+    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    volumes:
+      - redis_data:/data
+    networks:
+      - dokploy-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+      start_period: 10s
+
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile.api
+    restart: unless-stopped
+    # Migrasi dijalankan oleh CMD di Dockerfile.api, jadi container ini
+    # butuh MySQL yang benar-benar sudah siap.
+    depends_on:
+      mysql:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      NODE_ENV: production
+      PORT: 3001
+      # Host "mysql" adalah nama service di file ini.
+      DATABASE_URL: mysql://${MYSQL_USER:-pdits}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-planner_project}
+      REDIS_URL: redis://redis:6379
+      # WAJIB diisi. Tanpa ini JWT memakai nilai default yang ada di kode
+      # sehingga siapa pun bisa memalsukan token.
+      JWT_SECRET: ${JWT_SECRET}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      # Domain web yang boleh mengakses API (dipakai saat NODE_ENV=production).
+      CORS_ORIGIN: ${CORS_ORIGIN}
+      FRONTEND_URL: ${FRONTEND_URL}
+      # Akun admin pertama. Hanya dipakai saat tabel users masih kosong.
+      ADMIN_EMAIL: ${ADMIN_EMAIL}
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD}
+      # Pengganti default 127.0.0.1:8008 yang di dalam container menunjuk
+      # ke container itu sendiri (tidak akan pernah ketemu).
+      NPOF_API_URL: ${NPOF_API_URL}
+      NPOF_API_KEY: ${NPOF_API_KEY}
+      VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
+      VAPID_SUBJECT: ${VAPID_SUBJECT}
+    networks:
+      - dokploy-network
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile.web
+      args:
+        # Vite menanamkan nilai ini saat build, jadi harus diberikan di sini.
+        # Isi dengan URL publik API, contoh: https://api.domain-anda.com/api/v1
+        VITE_API_URL: ${VITE_API_URL}
+    restart: unless-stopped
+    depends_on:
+      - api
+    networks:
+      - dokploy-network
+
+volumes:
+  mysql_data:
+  redis_data:
+
+networks:
+  dokploy-network:
+    # Wajib external: jaringan ini dibuat Dokploy dan dipakai Traefik.
+    # Kalau tidak external, Compose akan membuat jaringan baru dan
+    # domain tidak akan bisa diarahkan ke service di sini.
+    external: true

@@ -1,8 +1,10 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchApi } from '../lib/api';
+import { PERIOD_QUERY_KEY, type DataModule } from './usePeriods';
 
 export interface WIP {
   id: string;
+  periodId: string;
   location: string;
   quantity: number;
   progressPercent: number;
@@ -13,7 +15,7 @@ export interface WIP {
   updatedAt: string;
   item: {
     id: string;
-    itemCode: string;
+    partNumber: string;
     itemName: string;
   };
   user: {
@@ -21,10 +23,20 @@ export interface WIP {
   };
 }
 
-export function useWIPs() {
+/**
+ * Data WIP. Kalau `periodId` + `moduleType` diberikan (selalu begitu di halaman
+ * WIP), data difilter untuk periode + modul itu saja. Tanpa keduanya (mis.
+ * halaman Master Item yang hanya memakai daftar nama lokasi) kedua modul dibaca
+ * — angka WIP tidak pernah ditampilkan di sana.
+ */
+export function useWIPs(periodId?: string | null, moduleType?: DataModule) {
+  const params = new URLSearchParams();
+  if (periodId) params.set('periodId', periodId);
+  if (moduleType) params.set('moduleType', moduleType);
+  const qs = params.toString();
   return useQuery<{ data: WIP[] }, Error>({
-    queryKey: ['wips'],
-    queryFn: () => fetchApi('/wip'),
+    queryKey: ['wips', periodId ?? 'ALL', moduleType ?? 'ALL'],
+    queryFn: () => fetchApi(qs ? `/wip?${qs}` : '/wip'),
   });
 }
 
@@ -42,6 +54,8 @@ export function useUpsertWIP() {
       status?: string;
       notes?: string;
       saveMode?: 'overwrite' | 'add';
+      periodId: string;
+      moduleType: DataModule;
     }) => 
       fetchApi('/wip', {
         method: 'POST',
@@ -50,6 +64,7 @@ export function useUpsertWIP() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['wips'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: PERIOD_QUERY_KEY });
     },
   });
 }
@@ -97,7 +112,7 @@ export function useBulkUpsertWIP() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: (data: { records: any[]; saveMode?: 'overwrite' | 'add' }) => 
+    mutationFn: (data: { records: any[]; saveMode?: 'overwrite' | 'add'; periodId: string; moduleType: DataModule }) => 
       fetchApi('/wip/bulk', {
         method: 'POST',
         body: JSON.stringify(data),
@@ -105,6 +120,7 @@ export function useBulkUpsertWIP() {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['wips'] });
       queryClient.invalidateQueries({ queryKey: ['dashboard'] });
+      queryClient.invalidateQueries({ queryKey: PERIOD_QUERY_KEY });
     },
   });
 }

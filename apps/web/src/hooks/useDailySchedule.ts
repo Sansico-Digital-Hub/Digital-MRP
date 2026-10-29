@@ -8,7 +8,7 @@ export interface DailySchedule {
   quantity: number;
   item: {
     id: string;
-    itemCode: string;
+    partNumber: string;
     itemName: string;
   };
   masterCarton?: string;

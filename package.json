@@ -26,7 +26,8 @@
   "author": "PDITS Team",
   "license": "MIT",
   "engines": {
-    "node": ">=20.0.0",
-    "pnpm": ">=8.0.0"
-  }
+    "node": ">=22.13.0",
+    "pnpm": ">=11.0.0"
+  },
+  "packageManager": "pnpm@11.13.1"
 }

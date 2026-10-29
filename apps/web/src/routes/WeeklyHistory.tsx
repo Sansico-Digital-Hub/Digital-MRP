@@ -2,8 +2,10 @@ import { useState, useEffect } from 'react';
 import { Calendar, Filter, Loader2, Package, Layers, AlertTriangle, Activity } from 'lucide-react';
 
 import { fetchApi } from '../lib/api';
+import { useTranslation } from '../i18n';
 
 export default function WeeklyHistory() {
+  const { t, locale } = useTranslation();
   const [loading, setLoading] = useState(true);
   const [data, setData] = useState<any[]>([]);
   const [error, setError] = useState('');
@@ -65,7 +67,7 @@ export default function WeeklyHistory() {
         setGlobalFulfillment(result.globalSummary.fulfillmentPercent || 0);
       }
     } catch (err: any) {
-      setError(err.message || 'Failed to load history data');
+      setError(err.message || t('weeklyHistory.failedLoad'));
     } finally {
       setLoading(false);
     }
@@ -88,8 +90,8 @@ export default function WeeklyHistory() {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-center gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-gray-900">Weekly History</h1>
-          <p className="text-gray-500 mt-1">Laporan harian & mingguan untuk pergerakan Demand, FG, dan WIP</p>
+          <h1 className="text-2xl font-bold text-gray-900">{t('weeklyHistory.title')}</h1>
+          <p className="text-gray-500 mt-1">{t('weeklyHistory.subtitle')}</p>
         </div>
 
         <div className="flex items-center gap-3">
@@ -122,12 +124,12 @@ export default function WeeklyHistory() {
       <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
         <div className="bg-card text-card-foreground border rounded-lg p-6 shadow-sm flex justify-between items-start">
           <div className="space-y-2">
-            <p className="text-sm font-medium text-muted-foreground">Total Part Number</p>
+            <p className="text-sm font-medium text-muted-foreground">{t('weeklyHistory.totalPartNumber')}</p>
             <h3 className="text-3xl font-bold tracking-tight text-blue-600 dark:text-blue-400">
               {totalItems}
             </h3>
             <p className="text-xs text-muted-foreground">
-              Total unique items in history.
+              {t('weeklyHistory.totalPartNumberDesc')}
             </p>
           </div>
           <div className="p-2 bg-blue-50 dark:bg-blue-950 text-blue-600 dark:text-blue-400 rounded-md">
@@ -137,12 +139,12 @@ export default function WeeklyHistory() {
 
         <div className="bg-card text-card-foreground border rounded-lg p-6 shadow-sm flex justify-between items-start">
           <div className="space-y-2">
-            <p className="text-sm font-medium text-muted-foreground">Total Gap</p>
+            <p className="text-sm font-medium text-muted-foreground">{t('weeklyHistory.totalGap')}</p>
             <h3 className="text-3xl font-bold tracking-tight text-red-600 dark:text-red-400">
-              {totalGap.toLocaleString()}
+              {totalGap.toLocaleString(locale)}
             </h3>
             <p className="text-xs text-muted-foreground">
-              Total shortage gap across all items.
+              {t('weeklyHistory.totalGapDesc')}
             </p>
           </div>
           <div className="p-2 bg-red-50 dark:bg-red-950 text-red-600 dark:text-red-400 rounded-md">
@@ -152,12 +154,12 @@ export default function WeeklyHistory() {
 
         <div className="bg-card text-card-foreground border rounded-lg p-6 shadow-sm flex justify-between items-start">
           <div className="space-y-2">
-            <p className="text-sm font-medium text-muted-foreground">Performance</p>
+            <p className="text-sm font-medium text-muted-foreground">{t('weeklyHistory.performance')}</p>
             <h3 className="text-3xl font-bold tracking-tight text-green-600 dark:text-green-400">
               {globalFulfillment}%
             </h3>
             <p className="text-xs text-muted-foreground">
-              Overall fulfillment performance.
+              {t('weeklyHistory.performanceDesc')}
             </p>
           </div>
           <div className="p-2 bg-green-50 dark:bg-green-950 text-green-600 dark:text-green-400 rounded-md">
@@ -171,7 +173,7 @@ export default function WeeklyHistory() {
           <div className="flex flex-col sm:flex-row items-center gap-3 w-full sm:w-auto">
             <input
               type="text"
-              placeholder="Cari Item Code / Name..."
+              placeholder={t('weeklyHistory.searchPlaceholder')}
               className="w-full sm:w-80 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none"
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
@@ -181,16 +183,16 @@ export default function WeeklyHistory() {
               onChange={(e) => setPerfRange(e.target.value)}
               className="w-full sm:w-48 px-4 py-2 border border-gray-300 rounded-lg focus:ring-2 focus:ring-blue-500 focus:border-blue-500 outline-none bg-white text-sm"
             >
-              <option value="all">Semua Performance</option>
-              <option value="0-30">Performance 0% - 30%</option>
-              <option value="30-50">Performance 30% - 50%</option>
-              <option value="50-70">Performance 50% - 70%</option>
-              <option value="70-100">Performance 70% - 100%</option>
+              <option value="all">{t('weeklyHistory.perfAll')}</option>
+              <option value="0-30">{t('weeklyHistory.perfRange', { min: 0, max: 30 })}</option>
+              <option value="30-50">{t('weeklyHistory.perfRange', { min: 30, max: 50 })}</option>
+              <option value="50-70">{t('weeklyHistory.perfRange', { min: 50, max: 70 })}</option>
+              <option value="70-100">{t('weeklyHistory.perfRange', { min: 70, max: 100 })}</option>
             </select>
           </div>
           <div className="flex items-center gap-2 bg-blue-50 text-blue-800 px-4 py-2 rounded-lg font-medium border border-blue-100 whitespace-nowrap w-full sm:w-auto justify-center">
             <Package className="w-5 h-5 text-blue-600" />
-            <span>Total Fulfillment Seminggu: {globalFulfillment}%</span>
+            <span>{t('weeklyHistory.totalWeeklyFulfillment', { value: globalFulfillment })}</span>
           </div>
         </div>
 
@@ -202,18 +204,18 @@ export default function WeeklyHistory() {
           ) : error ? (
             <div className="p-8 text-center text-red-500">{error}</div>
           ) : filteredData.length === 0 ? (
-            <div className="p-8 text-center text-gray-500">Tidak ada data history untuk periode ini</div>
+            <div className="p-8 text-center text-gray-500">{t('weeklyHistory.noDataPeriod')}</div>
           ) : (
             <table className="w-full text-sm text-left">
               <thead className="text-xs text-gray-700 uppercase bg-gray-50 border-b">
                 <tr>
-                  <th className="px-6 py-3 whitespace-nowrap bg-white sticky left-0 z-10 border-r min-w-[200px]">Item</th>
+                  <th className="px-6 py-3 whitespace-nowrap bg-white sticky left-0 z-10 border-r min-w-[200px]">{t('weeklyHistory.item')}</th>
                   {dates.map((d: Date, idx: number) => (
                     <th key={idx} className="px-6 py-3 text-center min-w-[150px] border-r">
-                      {d.toLocaleDateString('id-ID', { weekday: 'short', day: 'numeric', month: 'short' })}
+                      {d.toLocaleDateString(locale, { weekday: 'short', day: 'numeric', month: 'short' })}
                     </th>
                   ))}
-                  <th className="px-6 py-3 text-center bg-blue-50 min-w-[180px]">Weekly Summary</th>
+                  <th className="px-6 py-3 text-center bg-blue-50 min-w-[180px]">{t('weeklyHistory.weeklySummary')}</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-200">
@@ -227,20 +229,20 @@ export default function WeeklyHistory() {
                       <td key={dIdx} className="px-4 py-3 border-r align-top">
                         <div className="flex flex-col gap-1 text-xs">
                           <div className="flex justify-between">
-                            <span className="text-gray-500">Demand:</span>
+                            <span className="text-gray-500">{t('weeklyHistory.demand')}:</span>
                             <span className="font-medium">{day.demand}</span>
                           </div>
                           <div className="flex justify-between">
-                            <span className="text-gray-500">FG Stock:</span>
+                            <span className="text-gray-500">{t('weeklyHistory.fgStock')}:</span>
                             <span className="font-medium text-green-600">{day.fgStock}</span>
                           </div>
                           <div className="flex justify-between">
-                            <span className="text-gray-500">WIP:</span>
+                            <span className="text-gray-500">{t('weeklyHistory.wip')}:</span>
                             <span className="font-medium text-yellow-600">{day.wip}</span>
                           </div>
                           <div className="w-full h-px bg-gray-100 my-1"></div>
                           <div className="flex justify-between">
-                            <span className="text-gray-500">Gap:</span>
+                            <span className="text-gray-500">{t('weeklyHistory.gap')}:</span>
                             <span className={`font-medium ${day.shortage > 0 ? 'text-red-600' : 'text-gray-900'}`}>
                               {day.shortage > 0 ? `-${day.shortage}` : '0'}
                             </span>
@@ -251,25 +253,25 @@ export default function WeeklyHistory() {
                     <td className="px-4 py-3 bg-blue-50/50 align-top">
                        <div className="flex flex-col gap-2 text-xs">
                           <div className="flex justify-between items-center bg-white p-2 rounded border">
-                            <span className="text-gray-600 font-medium">Fulfillment</span>
+                            <span className="text-gray-600 font-medium">{t('weeklyHistory.fulfillment')}</span>
                             <span className={`font-bold ${item.summary.weeklyFulfillmentPercent >= 100 ? 'text-green-600' : 'text-orange-600'}`}>
                               {item.summary.weeklyFulfillmentPercent}%
                             </span>
                           </div>
                           <div className="flex justify-between px-1">
-                            <span className="text-gray-500">Total Demand:</span>
+                            <span className="text-gray-500">{t('weeklyHistory.totalDemand')}:</span>
                             <span className="font-medium">{item.summary.weeklyDemand}</span>
                           </div>
                           <div className="flex justify-between px-1">
-                            <span className="text-gray-500">Total FG Stock:</span>
+                            <span className="text-gray-500">{t('weeklyHistory.totalFgStock')}:</span>
                             <span className="font-medium text-green-600">{item.daily.reduce((acc: any, d: any) => acc + d.fgStock, 0)}</span>
                           </div>
                           <div className="flex justify-between px-1">
-                            <span className="text-gray-500">Total WIP:</span>
+                            <span className="text-gray-500">{t('weeklyHistory.totalWip')}:</span>
                             <span className="font-medium text-yellow-600">{item.daily.reduce((acc: any, d: any) => acc + d.wip, 0)}</span>
                           </div>
                           <div className="flex justify-between px-1">
-                            <span className="text-gray-500">Total Gap:</span>
+                            <span className="text-gray-500">{t('weeklyHistory.totalGap')}:</span>
                             <span className="font-medium text-red-600">{item.daily.reduce((acc: any, d: any) => acc + (d.shortage > 0 ? d.shortage : 0), 0)}</span>
                           </div>
                        </div>
@@ -285,7 +287,7 @@ export default function WeeklyHistory() {
         {!loading && filteredData.length > 0 && totalPages > 1 && (
           <div className="p-4 border-t border-gray-200 flex items-center justify-between bg-gray-50">
             <span className="text-sm text-gray-500">
-              Menampilkan {(page - 1) * limit + 1} - {Math.min(page * limit, totalItems)} dari {totalItems} item
+              {t('weeklyHistory.showingItems', { from: (page - 1) * limit + 1, to: Math.min(page * limit, totalItems), total: totalItems })}
             </span>
             <div className="flex gap-2">
               <button
@@ -293,17 +295,17 @@ export default function WeeklyHistory() {
                 disabled={page === 1}
                 className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white hover:bg-gray-50 disabled:opacity-50 font-medium cursor-pointer"
               >
-                Previous
+                {t('weeklyHistory.previous')}
               </button>
               <span className="px-3 py-1.5 text-sm font-medium text-gray-700 bg-white border border-gray-200 rounded-lg">
-                Page {page} of {totalPages}
+                {t('weeklyHistory.pageOf', { page, totalPages })}
               </span>
               <button
                 onClick={() => setPage(p => Math.min(totalPages, p + 1))}
                 disabled={page === totalPages}
                 className="px-3 py-1.5 border border-gray-300 rounded-lg text-sm bg-white hover:bg-gray-50 disabled:opacity-50 font-medium cursor-pointer"
               >
-                Next
+                {t('common.next')}
               </button>
             </div>
           </div>

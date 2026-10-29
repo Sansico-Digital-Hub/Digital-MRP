@@ -1,0 +1,35 @@
+# ============================================================
+# .dockerignore
+# Tujuan: build context kecil + rahasia tidak pernah masuk image.
+# Tanpa file ini, `COPY . .` ikut menyalin node_modules (ratusan MB)
+# dan file .env berisi kredensial database ke dalam image.
+# ============================================================
+
+# Dependency & hasil build — selalu dibangun ulang di dalam image
+node_modules
+**/node_modules
+dist
+**/dist
+**/*.tsbuildinfo
+**/.vite
+
+# Environment & rahasia — JANGAN pernah masuk image
+.env
+.env.*
+!.env.example
+
+# Folder hasil uji `pnpm deploy` lokal (tidak dipakai di image)
+_prod_check
+_prod_check2
+
+# File data besar, tidak dipakai saat build/runtime
+*.xlsm
+*.xlsx
+*.log
+
+# VCS & editor
+.git
+.gitignore
+.vscode
+.idea
+*.timestamp-*.mjs

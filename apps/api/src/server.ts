@@ -13,9 +13,18 @@ import wipRoutes from './routes/wip';
 import trackingRoutes from './routes/tracking';
 import usersRoutes from './routes/users';
 import weeklyScheduleRoutes from './routes/weeklySchedule';
+import hotlistRoutes from './routes/hotlist';
+import stockRawMaterialRoutes from './routes/stockRawMaterial';
+import outstandingPoRoutes from './routes/outstandingPo';
+import npofMaterialsRoutes from './routes/npofMaterials';
+import materialCalcRoutes from './routes/materialCalc';
+import materialPlanningRoutes from './routes/materialPlanning';
+import mrpVersionRoutes from './routes/mrpVersions';
 import historyRoutes from './routes/history';
 import fgStockHistoryRoutes from './routes/fgStockHistory';
 import { startCleanupSchedule, stopCleanupSchedule } from './lib/cleanup';
+import { bootstrapAdmin } from './lib/bootstrapAdmin';
+import multipart from '@fastify/multipart';
 
 const server = Fastify({
   bodyLimit: 52428800, // 50MB
@@ -60,6 +69,9 @@ async function registerPlugins() {
     timeWindow: '1 minute',
   });
 
+  // Multipart
+  await server.register(multipart);
+
   // API Routes
   await server.register(authRoutes);
   await server.register(itemsRoutes);
@@ -69,6 +81,13 @@ async function registerPlugins() {
   await server.register(trackingRoutes);
   await server.register(usersRoutes);
   await server.register(weeklyScheduleRoutes);
+  await server.register(mrpVersionRoutes);
+  await server.register(hotlistRoutes);
+  await server.register(stockRawMaterialRoutes);
+  await server.register(outstandingPoRoutes);
+  await server.register(npofMaterialsRoutes);
+  await server.register(materialCalcRoutes);
+  await server.register(materialPlanningRoutes);
   await server.register(historyRoutes);
   await server.register(fgStockHistoryRoutes);
 }
@@ -140,13 +159,16 @@ async function start() {
   try {
     await registerPlugins();
 
+    // Buat akun admin pertama bila database masih kosong (lihat lib/bootstrapAdmin.ts).
+    await bootstrapAdmin();
+
     await server.listen({
       port: config.port,
       host: '0.0.0.0',
     });
 
     // Start daily cleanup of old schedule records (>14 days)
-    // startCleanupSchedule(); // Disabled to keep data history
+    startCleanupSchedule();
 
     console.log(`
     🚀 PDITS API Server is running!

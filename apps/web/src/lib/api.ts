@@ -1,12 +1,20 @@
 import { useAuthStore } from '../stores/authStore';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api/v1';
+// Diekspor agar halaman Login bisa memakai URL yang sama tanpa hardcode.
+export const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3001/api/v1';
 
 export async function fetchApi<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
   const { accessToken, logout } = useAuthStore.getState();
   
   const headers = new Headers(options.headers || {});
-  headers.set('Content-Type', 'application/json');
+  // Content-Type hanya dikirim KALAU ada body.
+  // Kalau tidak, Fastify menolak dengan "Body cannot be empty when content-type
+  // is set to 'application/json'" — ini menjebak semua POST tanpa body
+  // (mis. hitung kalkulasi, tandai notifikasi sudah dibaca).
+  const hasBody = options.body !== undefined && options.body !== null;
+  if (hasBody && !(options.body instanceof FormData)) {
+    headers.set('Content-Type', 'application/json');
+  }
   
   if (accessToken) {
     headers.set('Authorization', `Bearer ${accessToken}`);

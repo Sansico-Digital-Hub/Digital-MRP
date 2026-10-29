@@ -3,8 +3,10 @@ import { useItems, useCreateItem, useDeleteItem, useUpdateItem, useMasterCartons
 import { useWIPs } from '../hooks/useWIP';
 import { SearchableSelect } from '../components/SearchableSelect';
 import { Plus, Trash2, Pencil, Search, PackageOpen, Sliders, Scale, MapPin, Box, Tag, Layers } from 'lucide-react';
+import { useTranslation } from '../i18n';
 
 export function Items() {
+  const { t } = useTranslation();
   const { data, isLoading } = useItems();
   const { data: wipData } = useWIPs();
   
@@ -35,13 +37,13 @@ export function Items() {
 
   // 1. Part Numbers / Master Items Form & Edit State
   const [showItemForm, setShowItemForm] = useState(false);
-  const [editingItem, setEditingItem] = useState<{ id: string; partNumber: string; description: string; unit: string } | null>(null);
-  const [itemFormData, setItemFormData] = useState({ partNumber: '', description: '', unit: 'pcs' });
+  const [editingItem, setEditingItem] = useState<{ id: string; partNumber: string; itemName: string; unit: string } | null>(null);
+  const [itemFormData, setItemFormData] = useState({ itemCode: '', itemName: '', unit: 'pcs' });
 
   // 1b. Toy Names Form & Edit State
   const [showToyForm, setShowToyForm] = useState(false);
-  const [editingToy, setEditingToy] = useState<{ id: string; partNumber: string; description: string; unit: string } | null>(null);
-  const [toyFormData, setToyFormData] = useState({ partNumber: '', description: '', unit: 'SET' });
+  const [editingToy, setEditingToy] = useState<{ id: string; partNumber: string; itemName: string; unit: string } | null>(null);
+  const [toyFormData, setToyFormData] = useState({ itemCode: '', itemName: '', unit: 'SET' });
 
   const itemUnitOptions = useMemo(() => {
     const opts = units.map(u => ({ value: u, label: u }));
@@ -71,16 +73,16 @@ export function Items() {
 
   // CRUD for Part Numbers & Toy Names
   
-  // Filter items into Part Numbers (itemName === itemCode)
-  const partNumbers = items.filter(item => item.partNumber === item.description);
+  // Filter items into Part Numbers (itemName === partNumber)
+  const partNumbers = items.filter(item => item.partNumber === item.itemName);
   const filteredItems = partNumbers.filter(
     item => item.partNumber.toLowerCase().includes(search.toLowerCase())
   );
 
-  // Filter items into Toy Names (itemName !== itemCode)
-  const toyNames = items.filter(item => item.partNumber !== item.description);
+  // Filter items into Toy Names (itemName !== partNumber)
+  const toyNames = items.filter(item => item.partNumber !== item.itemName);
   const filteredToyNames = toyNames.filter(
-    item => item.description.toLowerCase().includes(search.toLowerCase()) ||
+    item => item.itemName.toLowerCase().includes(search.toLowerCase()) ||
             item.partNumber.toLowerCase().includes(search.toLowerCase())
   );
 
@@ -97,22 +99,22 @@ export function Items() {
       if (editingItem) {
         await updateItem.mutateAsync({
           id: editingItem.id,
-          partNumber: itemFormData.partNumber,
-          description: itemFormData.partNumber, // Keep them identical for Part Numbers
+          partNumber: itemFormData.itemCode,
+          itemName: itemFormData.itemCode, // Keep them identical for Part Numbers
           unit: itemFormData.unit
         });
         setEditingItem(null);
       } else {
         await createItem.mutateAsync({
-          partNumber: itemFormData.partNumber,
-          description: itemFormData.partNumber, // Keep them identical for Part Numbers
+          partNumber: itemFormData.itemCode,
+          itemName: itemFormData.itemCode, // Keep them identical for Part Numbers
           unit: itemFormData.unit
         });
       }
-      setItemFormData({ partNumber: '', description: '', unit: units[0] || 'pcs' });
+      setItemFormData({ itemCode: '', itemName: '', unit: units[0] || 'pcs' });
       setShowItemForm(false);
     } catch (err: any) {
-      alert(err.message || 'Failed to save part number');
+      alert(err.message || t('items.errors.savePartNumber'));
     }
   };
 
@@ -122,23 +124,23 @@ export function Items() {
       if (editingToy) {
         await updateItem.mutateAsync({
           id: editingToy.id,
-          partNumber: toyFormData.partNumber,
-          description: toyFormData.description,
+          partNumber: toyFormData.itemCode,
+          itemName: toyFormData.itemName,
           unit: toyFormData.unit
         });
         setEditingToy(null);
       } else {
         const randomCode = `PN-${Date.now().toString().slice(-5)}`;
         await createItem.mutateAsync({
-          partNumber: toyFormData.partNumber || randomCode,
-          description: toyFormData.description,
+          partNumber: toyFormData.itemCode || randomCode,
+          itemName: toyFormData.itemName,
           unit: toyFormData.unit
         });
       }
-      setToyFormData({ partNumber: '', description: '', unit: 'SET' });
+      setToyFormData({ itemCode: '', itemName: '', unit: 'SET' });
       setShowToyForm(false);
     } catch (err: any) {
-      alert(err.message || 'Failed to save toy name');
+      alert(err.message || t('items.errors.saveToyName'));
     }
   };
 
@@ -149,7 +151,7 @@ export function Items() {
         await updateMasterCarton.mutateAsync({
           id: editingMc.id,
           cartonCode: mcFormData.cartonCode,
-          toyName: mcFormData.toyNameItemId,
+          toyNameItemId: mcFormData.toyNameItemId,
           partNumberCode: mcFormData.partNumberCode
         });
         setEditingMc(null);
@@ -159,26 +161,26 @@ export function Items() {
       setMcFormData({ cartonCode: '', toyNameItemId: '', partNumberCode: '' });
       setShowMcForm(false);
     } catch (err: any) {
-      alert(err.message || 'Failed to save master carton');
+      alert(err.message || t('items.errors.saveMasterCarton'));
     }
   };
 
   const handleMcDelete = async (id: string) => {
-    if (confirm('Are you sure you want to delete this master carton?')) {
+    if (confirm(t('items.confirmDeleteMasterCarton'))) {
       try {
         await deleteMasterCarton.mutateAsync(id);
       } catch (err: any) {
-        alert(err.message || 'Failed to delete master carton');
+        alert(err.message || t('items.errors.deleteMasterCarton'));
       }
     }
   };
 
   const handleItemDelete = async (id: string) => {
-    if (confirm('Are you sure you want to delete this part number?')) {
+    if (confirm(t('items.confirmDeletePartNumber'))) {
       try {
         await deleteItem.mutateAsync(id);
       } catch (err: any) {
-        alert(err.message || 'Failed to delete item');
+        alert(err.message || t('items.errors.deleteItem'));
       }
     }
   };
@@ -186,7 +188,7 @@ export function Items() {
 
 
   if (isLoading) {
-    return <div className="p-8 text-center text-muted-foreground">Loading dropdown settings...</div>;
+    return <div className="p-8 text-center text-muted-foreground">{t('items.loading')}</div>;
   }
 
   return (
@@ -194,9 +196,9 @@ export function Items() {
       {/* Header */}
       <div>
         <h2 className="text-2xl font-bold tracking-tight flex items-center gap-2">
-          <Sliders className="text-primary" size={24} /> Dropdown Management
+          <Sliders className="text-primary" size={24} /> {t('layout.menu.dropdownManagement')}
         </h2>
-        <p className="text-muted-foreground text-sm">Configure and manage dropdown options across the entire system catalog.</p>
+        <p className="text-muted-foreground text-sm">{t('items.subtitle')}</p>
       </div>
 
       {/* Tabs */}
@@ -210,7 +212,7 @@ export function Items() {
           }`}
         >
           <Box size={16} />
-          <span>Part Numbers</span>
+          <span>{t('items.tabs.partNumbers')}</span>
         </button>
         <button
           onClick={() => { setActiveTab('toy_names'); setSearch(''); setEditingItem(null); setEditingToy(null); setShowToyForm(false); }}
@@ -221,7 +223,7 @@ export function Items() {
           }`}
         >
           <Tag size={16} />
-          <span>Toy Names</span>
+          <span>{t('items.tabs.toyNames')}</span>
         </button>
         <button
           onClick={() => { setActiveTab('master_cartons'); setSearch(''); setEditingItem(null); setEditingMc(null); setShowMcForm(false); }}
@@ -232,7 +234,7 @@ export function Items() {
           }`}
         >
           <Layers size={16} />
-          <span>Master Cartons</span>
+          <span>{t('items.tabs.masterCartons')}</span>
         </button>
         <button
           onClick={() => { setActiveTab('units'); setSearch(''); setEditingItem(null); }}
@@ -243,7 +245,7 @@ export function Items() {
           }`}
         >
           <Scale size={16} />
-          <span>Measurement Units</span>
+          <span>{t('items.tabs.units')}</span>
         </button>
         <button
           onClick={() => { setActiveTab('locations'); setSearch(''); setEditingItem(null); }}
@@ -254,7 +256,7 @@ export function Items() {
           }`}
         >
           <MapPin size={16} />
-          <span>WIP Locations</span>
+          <span>{t('items.tabs.locations')}</span>
         </button>
       </div>
 
@@ -262,48 +264,48 @@ export function Items() {
       {activeTab === 'items' && (
         <div className="space-y-6">
           <div className="flex justify-between items-center">
-            <h3 className="font-semibold text-lg">Part Numbers / Master Catalog</h3>
+            <h3 className="font-semibold text-lg">{t('items.partNumbers.title')}</h3>
             <button 
               onClick={() => {
                 setShowItemForm(!showItemForm);
                 setEditingItem(null);
-                setItemFormData({ partNumber: '', description: '', unit: units[0] || 'pcs' });
+                setItemFormData({ itemCode: '', itemName: '', unit: units[0] || 'pcs' });
               }}
               className="bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 rounded-md font-medium text-sm flex items-center space-x-2"
             >
               <Plus size={16} />
-              <span>Add New Part</span>
+              <span>{t('items.partNumbers.addNew')}</span>
             </button>
           </div>
 
           {showItemForm && (
             <div className="bg-card text-card-foreground border rounded-lg p-6 shadow-sm">
-              <h4 className="font-semibold mb-4">{editingItem ? 'Edit Catalog Item' : 'Create New Catalog Item'}</h4>
+              <h4 className="font-semibold mb-4">{editingItem ? t('items.partNumbers.editTitle') : t('items.partNumbers.createTitle')}</h4>
               <form onSubmit={handleItemSubmit} className="flex flex-wrap items-end gap-4">
                 <div className="flex-1 min-w-[200px] space-y-2">
-                  <label className="text-sm font-medium text-muted-foreground">Item Code / Part Number</label>
+                  <label className="text-sm font-medium text-muted-foreground">{t('items.partNumbers.itemCode')}</label>
                   <input 
                     type="text" 
                     required
                     className="w-full h-10 px-3 py-2 border rounded-md"
-                    value={itemFormData.partNumber}
-                    onChange={e => setItemFormData({...itemFormData, partNumber: e.target.value})}
-                    placeholder="e.g. PROD-F006"
+                    value={itemFormData.itemCode}
+                    onChange={e => setItemFormData({...itemFormData, itemCode: e.target.value})}
+                    placeholder={t('items.partNumbers.itemCodePlaceholder')}
                   />
                 </div>
                 <div className="flex-1 min-w-[250px] space-y-2">
-                  <label className="text-sm font-medium text-muted-foreground">Item Name / Description</label>
+                  <label className="text-sm font-medium text-muted-foreground">{t('items.itemName')}</label>
                   <input 
                     type="text" 
                     required
                     className="w-full h-10 px-3 py-2 border rounded-md"
-                    value={itemFormData.description}
-                    onChange={e => setItemFormData({...itemFormData, description: e.target.value})}
-                    placeholder="e.g. Component X"
+                    value={itemFormData.itemName}
+                    onChange={e => setItemFormData({...itemFormData, itemName: e.target.value})}
+                    placeholder={t('items.partNumbers.itemNamePlaceholder')}
                   />
                 </div>
                 <div className="w-48 space-y-2">
-                  <label className="text-sm font-medium text-muted-foreground">Unit</label>
+                  <label className="text-sm font-medium text-muted-foreground">{t('items.unit')}</label>
                   <SearchableSelect
                     options={itemUnitOptions}
                     value={itemFormData.unit}
@@ -311,7 +313,7 @@ export function Items() {
                     onAdd={newUnitVal => {
                       setItemFormData({ ...itemFormData, unit: newUnitVal });
                     }}
-                    placeholder="Select or type unit..."
+                    placeholder={t('items.unitPlaceholder')}
                   />
                 </div>
                 <button 
@@ -319,18 +321,18 @@ export function Items() {
                   disabled={createItem.isPending || updateItem.isPending}
                   className="h-10 bg-primary text-primary-foreground hover:bg-primary/90 px-4 rounded-md font-medium disabled:opacity-50 text-sm"
                 >
-                  {createItem.isPending || updateItem.isPending ? 'Saving...' : editingItem ? 'Update Item' : 'Save Item'}
+                  {createItem.isPending || updateItem.isPending ? t('items.saving') : editingItem ? t('items.partNumbers.updateItem') : t('items.partNumbers.saveItem')}
                 </button>
                 <button 
                   type="button" 
                   onClick={() => {
                     setShowItemForm(false);
                     setEditingItem(null);
-                    setItemFormData({ partNumber: '', description: '', unit: units[0] || 'pcs' });
+                    setItemFormData({ itemCode: '', itemName: '', unit: units[0] || 'pcs' });
                   }}
                   className="h-10 border hover:bg-secondary px-4 rounded-md font-medium text-sm"
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
               </form>
             </div>
@@ -342,32 +344,32 @@ export function Items() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
                 <input 
                   type="text" 
-                  placeholder="Search parts..." 
+                  placeholder={t('items.partNumbers.searchPlaceholder')} 
                   className="w-full h-9 pl-9 pr-4 text-sm border rounded-md bg-background"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                 />
               </div>
               <div className="text-sm text-muted-foreground">
-                Total: {filteredItems.length} parts
+                {t('items.partNumbers.total', { count: filteredItems.length })}
               </div>
             </div>
 
             {filteredItems.length === 0 ? (
               <div className="p-12 text-center flex flex-col items-center text-muted-foreground">
                 <PackageOpen size={48} className="mb-4 opacity-20" />
-                <p>No catalog parts found.</p>
+                <p>{t('items.partNumbers.noData')}</p>
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm text-left">
                   <thead className="bg-secondary/50 text-muted-foreground uppercase text-xs font-medium">
                     <tr>
-                      <th className="px-6 py-3 w-16">No</th>
-                      <th className="px-6 py-3">Part Number</th>
-                      <th className="px-6 py-3">Item Name</th>
-                      <th className="px-6 py-3">Unit</th>
-                      <th className="px-6 py-3 w-24 text-right">Actions</th>
+                      <th className="px-6 py-3 w-16">{t('items.no')}</th>
+                      <th className="px-6 py-3">{t('items.partNumber')}</th>
+                      <th className="px-6 py-3">{t('items.itemName')}</th>
+                      <th className="px-6 py-3">{t('items.unit')}</th>
+                      <th className="px-6 py-3 w-24 text-right">{t('common.actions')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
@@ -375,7 +377,7 @@ export function Items() {
                       <tr key={item.id} className="hover:bg-muted/50 transition-colors">
                         <td className="px-6 py-4">{index + 1}</td>
                         <td className="px-6 py-4 font-medium">{item.partNumber}</td>
-                        <td className="px-6 py-4">{item.description}</td>
+                        <td className="px-6 py-4">{item.itemName}</td>
                         <td className="px-6 py-4">
                           <span className="bg-secondary px-2 py-1 rounded text-xs">{item.unit}</span>
                         </td>
@@ -384,11 +386,11 @@ export function Items() {
                             <button
                               onClick={() => {
                                 setEditingItem(item);
-                                setItemFormData({ partNumber: item.partNumber, description: item.description, unit: item.unit });
+                                setItemFormData({ itemCode: item.partNumber, itemName: item.itemName, unit: item.unit });
                                 setShowItemForm(true);
                               }}
                               className="text-muted-foreground hover:text-primary p-1 rounded-md hover:bg-primary/10 transition-colors"
-                              title="Edit part"
+                              title={t('items.partNumbers.editAria')}
                             >
                               <Pencil size={16} />
                             </button>
@@ -396,7 +398,7 @@ export function Items() {
                               onClick={() => handleItemDelete(item.id)}
                               disabled={deleteItem.isPending}
                               className="text-muted-foreground hover:text-destructive p-1 rounded-md hover:bg-destructive/10 transition-colors disabled:opacity-50"
-                              title="Delete part"
+                              title={t('items.partNumbers.deleteAria')}
                             >
                               <Trash2 size={16} />
                             </button>
@@ -416,47 +418,47 @@ export function Items() {
       {activeTab === 'toy_names' && (
         <div className="space-y-6">
           <div className="flex justify-between items-center">
-            <h3 className="font-semibold text-lg">Toy Names Catalog</h3>
+            <h3 className="font-semibold text-lg">{t('items.toyNames.title')}</h3>
             <button 
               onClick={() => {
                 setShowToyForm(!showToyForm);
                 setEditingToy(null);
-                setToyFormData({ partNumber: '', description: '', unit: 'SET' });
+                setToyFormData({ itemCode: '', itemName: '', unit: 'SET' });
               }}
               className="bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 rounded-md font-medium text-sm flex items-center space-x-2"
             >
               <Plus size={16} />
-              <span>Add Toy Name</span>
+              <span>{t('items.toyNames.addNew')}</span>
             </button>
           </div>
 
           {showToyForm && (
             <div className="bg-card text-card-foreground border rounded-lg p-6 shadow-sm">
-              <h4 className="font-semibold mb-4">{editingToy ? 'Edit Toy Name' : 'Create New Toy Name'}</h4>
+              <h4 className="font-semibold mb-4">{editingToy ? t('items.toyNames.editTitle') : t('items.toyNames.createTitle')}</h4>
               <form onSubmit={handleToySubmit} className="flex flex-wrap items-end gap-4">
                 <div className="flex-1 min-w-[200px] space-y-2">
-                  <label className="text-sm font-medium text-muted-foreground">Toy Code (Optional, PN-XXXXX auto-generated)</label>
+                  <label className="text-sm font-medium text-muted-foreground">{t('items.toyNames.toyCodeLabel')}</label>
                   <input 
                     type="text" 
                     className="w-full h-10 px-3 py-2 border rounded-md bg-background"
-                    value={toyFormData.partNumber}
-                    onChange={e => setToyFormData({...toyFormData, partNumber: e.target.value})}
-                    placeholder="e.g. PN-12345"
+                    value={toyFormData.itemCode}
+                    onChange={e => setToyFormData({...toyFormData, itemCode: e.target.value})}
+                    placeholder={t('items.toyNames.toyCodePlaceholder')}
                   />
                 </div>
                 <div className="flex-1 min-w-[250px] space-y-2">
-                  <label className="text-sm font-medium text-muted-foreground">Toy Name</label>
+                  <label className="text-sm font-medium text-muted-foreground">{t('items.toyName')}</label>
                   <input 
                     type="text" 
                     required
                     className="w-full h-10 px-3 py-2 border rounded-md bg-background"
-                    value={toyFormData.description}
-                    onChange={e => setToyFormData({...toyFormData, description: e.target.value})}
-                    placeholder="e.g. Barbie Milan Edition"
+                    value={toyFormData.itemName}
+                    onChange={e => setToyFormData({...toyFormData, itemName: e.target.value})}
+                    placeholder={t('items.toyNames.toyNamePlaceholder')}
                   />
                 </div>
                 <div className="w-48 space-y-2">
-                  <label className="text-sm font-medium text-muted-foreground">Unit</label>
+                  <label className="text-sm font-medium text-muted-foreground">{t('items.unit')}</label>
                   <SearchableSelect
                     options={toyUnitOptions}
                     value={toyFormData.unit}
@@ -464,7 +466,7 @@ export function Items() {
                     onAdd={newUnitVal => {
                       setToyFormData({ ...toyFormData, unit: newUnitVal });
                     }}
-                    placeholder="Select or type unit..."
+                    placeholder={t('items.unitPlaceholder')}
                   />
                 </div>
                 <button 
@@ -472,18 +474,18 @@ export function Items() {
                   disabled={createItem.isPending || updateItem.isPending}
                   className="h-10 bg-primary text-primary-foreground hover:bg-primary/90 px-4 rounded-md font-medium disabled:opacity-50 text-sm"
                 >
-                  {createItem.isPending || updateItem.isPending ? 'Saving...' : editingToy ? 'Update' : 'Save'}
+                  {createItem.isPending || updateItem.isPending ? t('items.saving') : editingToy ? t('common.update') : t('common.save')}
                 </button>
                 <button 
                   type="button" 
                   onClick={() => {
                     setShowToyForm(false);
                     setEditingToy(null);
-                    setToyFormData({ partNumber: '', description: '', unit: 'SET' });
+                    setToyFormData({ itemCode: '', itemName: '', unit: 'SET' });
                   }}
                   className="h-10 border hover:bg-secondary px-4 rounded-md font-medium text-sm"
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
               </form>
             </div>
@@ -495,32 +497,32 @@ export function Items() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
                 <input 
                   type="text" 
-                  placeholder="Search toys..." 
+                  placeholder={t('items.toyNames.searchPlaceholder')} 
                   className="w-full h-9 pl-9 pr-4 text-sm border rounded-md bg-background"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                 />
               </div>
               <div className="text-sm text-muted-foreground">
-                Total: {filteredToyNames.length} toys
+                {t('items.toyNames.total', { count: filteredToyNames.length })}
               </div>
             </div>
 
             {filteredToyNames.length === 0 ? (
               <div className="p-12 text-center flex flex-col items-center text-muted-foreground">
                 <PackageOpen size={48} className="mb-4 opacity-20" />
-                <p>No toy names found.</p>
+                <p>{t('items.toyNames.noData')}</p>
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm text-left">
                   <thead className="bg-secondary/50 text-muted-foreground uppercase text-xs font-medium">
                     <tr>
-                      <th className="px-6 py-3 w-16">No</th>
-                      <th className="px-6 py-3">Toy Code</th>
-                      <th className="px-6 py-3">Toy Name</th>
-                      <th className="px-6 py-3">Unit</th>
-                      <th className="px-6 py-3 w-24 text-right">Actions</th>
+                      <th className="px-6 py-3 w-16">{t('items.no')}</th>
+                      <th className="px-6 py-3">{t('items.toyCode')}</th>
+                      <th className="px-6 py-3">{t('items.toyName')}</th>
+                      <th className="px-6 py-3">{t('items.unit')}</th>
+                      <th className="px-6 py-3 w-24 text-right">{t('common.actions')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
@@ -528,7 +530,7 @@ export function Items() {
                       <tr key={item.id} className="hover:bg-muted/50 transition-colors">
                         <td className="px-6 py-4">{index + 1}</td>
                         <td className="px-6 py-4 font-mono text-xs">{item.partNumber}</td>
-                        <td className="px-6 py-4 font-medium">{item.description}</td>
+                        <td className="px-6 py-4 font-medium">{item.itemName}</td>
                         <td className="px-6 py-4">
                           <span className="bg-secondary px-2 py-1 rounded text-xs">{item.unit}</span>
                         </td>
@@ -537,11 +539,11 @@ export function Items() {
                             <button
                               onClick={() => {
                                 setEditingToy(item);
-                                setToyFormData({ partNumber: item.partNumber, description: item.description, unit: item.unit });
+                                setToyFormData({ itemCode: item.partNumber, itemName: item.itemName, unit: item.unit });
                                 setShowToyForm(true);
                               }}
                               className="text-muted-foreground hover:text-primary p-1 rounded-md hover:bg-primary/10 transition-colors"
-                              title="Edit toy name"
+                              title={t('items.toyNames.editAria')}
                             >
                               <Pencil size={16} />
                             </button>
@@ -549,7 +551,7 @@ export function Items() {
                               onClick={() => handleItemDelete(item.id)}
                               disabled={deleteItem.isPending}
                               className="text-muted-foreground hover:text-destructive p-1 rounded-md hover:bg-destructive/10 transition-colors disabled:opacity-50"
-                              title="Delete toy name"
+                              title={t('items.toyNames.deleteAria')}
                             >
                               <Trash2 size={16} />
                             </button>
@@ -569,7 +571,7 @@ export function Items() {
       {activeTab === 'master_cartons' && (
         <div className="space-y-6">
           <div className="flex justify-between items-center">
-            <h3 className="font-semibold text-lg">Master Cartons mapping</h3>
+            <h3 className="font-semibold text-lg">{t('items.masterCartons.title')}</h3>
             <button 
               onClick={() => {
                 setShowMcForm(!showMcForm);
@@ -579,28 +581,28 @@ export function Items() {
               className="bg-primary text-primary-foreground hover:bg-primary/90 px-4 py-2 rounded-md font-medium text-sm flex items-center space-x-2"
             >
               <Plus size={16} />
-              <span>Add Master Carton</span>
+              <span>{t('items.masterCartons.addNew')}</span>
             </button>
           </div>
 
           {showMcForm && (
             <div className="bg-card text-card-foreground border rounded-lg p-6 shadow-sm">
-              <h4 className="font-semibold mb-4">{editingMc ? 'Edit Master Carton' : 'Create Master Carton'}</h4>
+              <h4 className="font-semibold mb-4">{editingMc ? t('items.masterCartons.editTitle') : t('items.masterCartons.createTitle')}</h4>
               <form onSubmit={handleMcSubmit} className="flex flex-wrap items-end gap-4">
                 <div className="flex-1 min-w-[200px] space-y-2">
-                  <label className="text-sm font-medium text-muted-foreground">Carton Code / Master Carton</label>
+                  <label className="text-sm font-medium text-muted-foreground">{t('items.masterCartons.cartonCodeLabel')}</label>
                   <input 
                     type="text" 
                     required
                     className="w-full h-10 px-3 py-2 border rounded-md bg-background"
                     value={mcFormData.cartonCode}
                     onChange={e => setMcFormData({...mcFormData, cartonCode: e.target.value})}
-                    placeholder="e.g. DWJ99-945H"
+                    placeholder={t('items.masterCartons.cartonCodePlaceholder')}
                   />
                 </div>
 
                 <div className="flex-1 min-w-[200px] space-y-2">
-                  <label className="text-sm font-medium text-muted-foreground">Select Part Number</label>
+                  <label className="text-sm font-medium text-muted-foreground">{t('items.masterCartons.selectPartNumber')}</label>
                   <select
                     className="w-full h-10 px-3 py-2 border rounded-md bg-background"
                     value={mcFormData.partNumberCode}
@@ -613,14 +615,14 @@ export function Items() {
                 </div>
 
                 <div className="flex-1 min-w-[200px] space-y-2">
-                  <label className="text-sm font-medium text-muted-foreground">Select Toy Name</label>
+                  <label className="text-sm font-medium text-muted-foreground">{t('items.masterCartons.selectToyName')}</label>
                   <select
                     className="w-full h-10 px-3 py-2 border rounded-md bg-background"
                     value={mcFormData.toyNameItemId}
                     onChange={e => setMcFormData({...mcFormData, toyNameItemId: e.target.value})}
                   >
-                    {toyNames.map(t => (
-                      <option key={t.id} value={t.id}>{t.description}</option>
+                    {toyNames.map(toy => (
+                      <option key={toy.id} value={toy.id}>{toy.itemName}</option>
                     ))}
                   </select>
                 </div>
@@ -630,7 +632,7 @@ export function Items() {
                   disabled={createMasterCarton.isPending || updateMasterCarton.isPending}
                   className="h-10 bg-primary text-primary-foreground hover:bg-primary/90 px-4 rounded-md font-medium disabled:opacity-50 text-sm"
                 >
-                  {createMasterCarton.isPending || updateMasterCarton.isPending ? 'Saving...' : editingMc ? 'Update' : 'Save'}
+                  {createMasterCarton.isPending || updateMasterCarton.isPending ? t('items.saving') : editingMc ? t('common.update') : t('common.save')}
                 </button>
                 <button 
                   type="button" 
@@ -641,7 +643,7 @@ export function Items() {
                   }}
                   className="h-10 border hover:bg-secondary px-4 rounded-md font-medium text-sm"
                 >
-                  Cancel
+                  {t('common.cancel')}
                 </button>
               </form>
             </div>
@@ -653,32 +655,32 @@ export function Items() {
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground" size={16} />
                 <input 
                   type="text" 
-                  placeholder="Search master cartons..." 
+                  placeholder={t('items.masterCartons.searchPlaceholder')} 
                   className="w-full h-9 pl-9 pr-4 text-sm border rounded-md bg-background"
                   value={search}
                   onChange={e => setSearch(e.target.value)}
                 />
               </div>
               <div className="text-sm text-muted-foreground">
-                Total: {filteredMasterCartons.length} cartons
+                {t('items.masterCartons.total', { count: filteredMasterCartons.length })}
               </div>
             </div>
 
             {filteredMasterCartons.length === 0 ? (
               <div className="p-12 text-center flex flex-col items-center text-muted-foreground">
                 <PackageOpen size={48} className="mb-4 opacity-20" />
-                <p>No master carton mappings found.</p>
+                <p>{t('items.masterCartons.noData')}</p>
               </div>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-sm text-left">
                   <thead className="bg-secondary/50 text-muted-foreground uppercase text-xs font-medium">
                     <tr>
-                      <th className="px-6 py-3 w-16">No</th>
-                      <th className="px-6 py-3">Carton Code</th>
-                      <th className="px-6 py-3">Part Number</th>
-                      <th className="px-6 py-3">Toy Name</th>
-                      <th className="px-6 py-3 w-24 text-right">Actions</th>
+                      <th className="px-6 py-3 w-16">{t('items.no')}</th>
+                      <th className="px-6 py-3">{t('items.cartonCode')}</th>
+                      <th className="px-6 py-3">{t('items.partNumber')}</th>
+                      <th className="px-6 py-3">{t('items.toyName')}</th>
+                      <th className="px-6 py-3 w-24 text-right">{t('common.actions')}</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-border">
@@ -689,7 +691,7 @@ export function Items() {
                           <td className="px-6 py-4">{index + 1}</td>
                           <td className="px-6 py-4 font-medium text-blue-600">{mc.cartonCode}</td>
                           <td className="px-6 py-4">{mc.partNumberCode}</td>
-                          <td className="px-6 py-4">{matchedToy ? matchedToy.description : '-'}</td>
+                          <td className="px-6 py-4">{matchedToy ? matchedToy.itemName : '-'}</td>
                           <td className="px-6 py-4 text-right">
                             <div className="flex items-center justify-end gap-2">
                               <button
@@ -699,7 +701,7 @@ export function Items() {
                                   setShowMcForm(true);
                                 }}
                                 className="text-muted-foreground hover:text-primary p-1 rounded-md hover:bg-primary/10 transition-colors"
-                                title="Edit master carton"
+                                title={t('items.masterCartons.editAria')}
                               >
                                 <Pencil size={16} />
                               </button>
@@ -707,7 +709,7 @@ export function Items() {
                                 onClick={() => handleMcDelete(mc.id)}
                                 disabled={deleteMasterCarton.isPending}
                                 className="text-muted-foreground hover:text-destructive p-1 rounded-md hover:bg-destructive/10 transition-colors disabled:opacity-50"
-                                title="Delete master carton"
+                                title={t('items.masterCartons.deleteAria')}
                               >
                                 <Trash2 size={16} />
                               </button>
@@ -728,12 +730,12 @@ export function Items() {
       {activeTab === 'units' && (
         <div className="space-y-4 max-w-3xl">
           <div className="bg-blue-50 border border-blue-200 text-blue-800 rounded-lg p-4 text-sm">
-            <span className="font-semibold">Info:</span> Units are dynamically loaded from existing Part Numbers and Toy Names in the database. To add a new unit, type it directly into the "Unit" field when adding/editing a Part Number or Toy Name.
+            <span className="font-semibold">{t('common.info')}:</span> {t('items.units.info')}
           </div>
           <div className="bg-card text-card-foreground border rounded-lg shadow-sm overflow-hidden">
             <div className="p-4 border-b bg-secondary/30 flex justify-between items-center">
-              <h4 className="font-semibold text-sm">Measurement Units dropdown list</h4>
-              <span className="text-xs text-muted-foreground">{units.length} options active</span>
+              <h4 className="font-semibold text-sm">{t('items.units.dropdownTitle')}</h4>
+              <span className="text-xs text-muted-foreground">{t('items.optionsActive', { count: units.length })}</span>
             </div>
             <div className="divide-y divide-border">
               {units.map((u, index) => (
@@ -753,12 +755,12 @@ export function Items() {
       {activeTab === 'locations' && (
         <div className="space-y-4 max-w-3xl">
           <div className="bg-blue-50 border border-blue-200 text-blue-800 rounded-lg p-4 text-sm">
-            <span className="font-semibold">Info:</span> WIP Locations are dynamically loaded from existing Work In Progress records in the database. To add a new location, type it directly into the "Location / Production Line" field when recording WIP.
+            <span className="font-semibold">{t('common.info')}:</span> {t('items.locations.info')}
           </div>
           <div className="bg-card text-card-foreground border rounded-lg shadow-sm overflow-hidden">
             <div className="p-4 border-b bg-secondary/30 flex justify-between items-center">
-              <h4 className="font-semibold text-sm">WIP Production Locations dropdown list</h4>
-              <span className="text-xs text-muted-foreground">{allLocations.length} options active</span>
+              <h4 className="font-semibold text-sm">{t('items.locations.dropdownTitle')}</h4>
+              <span className="text-xs text-muted-foreground">{t('items.optionsActive', { count: allLocations.length })}</span>
             </div>
             <div className="divide-y divide-border">
               {allLocations.map((loc, index) => (

@@ -53,11 +53,11 @@ async function main() {
 
   // Create sample items
   const items = [
-    { partNumber: 'PROD-A001', description: 'Produk A', unit: 'pcs' },
-    { partNumber: 'PROD-B002', description: 'Produk B', unit: 'pcs' },
-    { partNumber: 'PROD-C003', description: 'Produk C', unit: 'kg' },
-    { partNumber: 'PROD-D004', description: 'Produk D', unit: 'pcs' },
-    { partNumber: 'PROD-E005', description: 'Produk E', unit: 'box' },
+    { partNumber: 'PROD-A001', itemName: 'Produk A', unit: 'pcs' },
+    { partNumber: 'PROD-B002', itemName: 'Produk B', unit: 'pcs' },
+    { partNumber: 'PROD-C003', itemName: 'Produk C', unit: 'kg' },
+    { partNumber: 'PROD-D004', itemName: 'Produk D', unit: 'pcs' },
+    { partNumber: 'PROD-E005', itemName: 'Produk E', unit: 'box' },
   ];
 
   for (const item of items) {
@@ -102,7 +102,7 @@ async function main() {
   // Create sample FG stocks
   for (const item of itemRecords.slice(0, 3)) {
     await prisma.fGStock.upsert({
-      where: { itemId_date: { itemId: item.id, date: today } },
+      where: { itemId: item.id },
       update: {},
       create: {
         itemId: item.id,
@@ -123,11 +123,9 @@ async function main() {
     for (let i = 0; i < 2; i++) {
       await prisma.wIP.upsert({
         where: {
-          itemId_location_date_shift: {
+          itemId_location: {
             itemId: item.id,
             location: locations[i],
-            date: today,
-            shift: 1,
           },
         },
         update: {},

@@ -1,31 +1,56 @@
-FROM node:20-alpine AS base
+# Node 22 (bukan 20) karena pnpm 11 yang di-pin di "packageManager" butuh Node >= 22.13.
+FROM node:22-alpine AS base
+
+# openssl wajib agar Prisma query engine bisa jalan di Alpine (musl).
+RUN apk add --no-cache openssl
+
 ENV PNPM_HOME="/pnpm"
 ENV PATH="$PNPM_HOME:$PATH"
 RUN corepack enable
 
 WORKDIR /app
 
+# ----------------------------------------------------------------
+# BUILDER
+# ----------------------------------------------------------------
 FROM base AS builder
+
 COPY . .
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
-
-# Generate Prisma Client
-RUN pnpm --filter @pdits/api prisma:generate
 
 # Build shared packages and api
 RUN pnpm --filter @pdits/shared build
 RUN pnpm --filter @pdits/api build
 
-# Prune dependencies for production
-RUN pnpm deploy --filter=@pdits/api /prod/api
+# --legacy : WAJIB sejak pnpm v10. Tanpa flag ini build gagal dengan
+#            ERR_PNPM_DEPLOY_NONINJECTED_WORKSPACE (sudah diuji).
+# --prod   : buang devDependencies. Terukur: 305 -> 171 paket, 203MB -> 106MB.
+RUN pnpm deploy --legacy --prod --filter=@pdits/api /prod/api
 
+# Prisma Client HARUS di-generate ULANG di dalam tree hasil deploy. Dua alasan:
+#   1. `pnpm deploy --prod` tidak menjalankan postinstall @prisma/client,
+#      sehingga folder .prisma/client tidak ikut terbentuk. Akibatnya container
+#      gagal start dengan "Cannot find module '@prisma/client/runtime/library.js'".
+#   2. Engine Prisma terikat platform. Yang dibutuhkan container ini adalah
+#      engine Linux (musl), bukan hasil `pnpm install` di mesin developer.
+RUN cd /prod/api && ./node_modules/.bin/prisma generate --schema=./prisma/schema.prisma
+
+# ----------------------------------------------------------------
+# RUNNER
+# ----------------------------------------------------------------
 FROM base AS runner
-WORKDIR /app
+
 ENV NODE_ENV=production
+WORKDIR /app
+
+# Hanya hasil deploy yang disalin: sudah berisi dist/, prisma/ (schema +
+# migrations), dan node_modules produksi.
 COPY --from=builder /prod/api /app
 
-# Copy prisma schema/migrations for deployment steps
-COPY --from=builder /app/apps/api/prisma /app/prisma
-
 EXPOSE 3001
-CMD ["pnpm", "start"]
+
+# Migrasi dijalankan saat container start sehingga database kosong milik
+# Dokploy otomatis terbentuk tabelnya. Aman untuk 1 replika (default Dokploy).
+# Kalau nanti di-scale lebih dari 1 replika, pindahkan `prisma migrate deploy`
+# ke langkah deploy terpisah agar tidak saling balapan.
+CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy --schema=./prisma/schema.prisma && node dist/server.js"]

@@ -3,7 +3,7 @@ import { fetchApi } from '../lib/api';
 
 export interface Item {
   id: string;
-  itemCode: string;
+  partNumber: string;
   itemName: string;
   unit: string;
   createdAt: string;
@@ -42,7 +42,7 @@ export function useCreateItem() {
   const queryClient = useQueryClient();
   
   return useMutation({
-    mutationFn: (newItem: { itemCode: string; itemName: string; unit: string }) => 
+    mutationFn: (newItem: { partNumber: string; itemName: string; unit: string }) => 
       fetchApi('/items', {
         method: 'POST',
         body: JSON.stringify(newItem),
@@ -71,10 +71,10 @@ export function useUpdateItem() {
   const queryClient = useQueryClient();
 
   return useMutation({
-    mutationFn: ({ id, itemCode, itemName, unit }: { id: string; itemCode: string; itemName: string; unit: string }) => 
+    mutationFn: ({ id, partNumber, itemName, unit }: { id: string; partNumber: string; itemName: string; unit: string }) => 
       fetchApi(`/items/${id}`, {
         method: 'PUT',
-        body: JSON.stringify({ itemCode, itemName, unit }),
+        body: JSON.stringify({ partNumber, itemName, unit }),
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['items'] });

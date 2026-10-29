@@ -1,0 +1,1 @@
+import { PrismaClient } from '@prisma/client'; const prisma = new PrismaClient({ datasourceUrl: 'mysql://root:@localhost:3306/planner_project' }); async function main() { const matches = await prisma.$queryRawUnsafe('SELECT COUNT(*) as c FROM master_cartons mc JOIN items i ON mc.partNumberCode = i.partNumber'); console.log(matches); } main();

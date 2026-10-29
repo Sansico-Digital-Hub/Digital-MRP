@@ -1,10 +1,11 @@
+
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { RouterProvider, createRouter, createRoute, createRootRoute, redirect } from '@tanstack/react-router';
 import { Layout } from './components/layout/Layout';
 import { Dashboard } from './routes/Dashboard';
-import WeeklyHistory from './routes/WeeklyHistory';
 import { Login } from './routes/Login';
 import { useAuthStore } from './stores/authStore';
+import { isFeatureEnabled } from './lib/features';
 import './index.css';
 
 const queryClient = new QueryClient();
@@ -64,10 +65,49 @@ import { Items } from './routes/Items';
 import { Users } from './routes/Users';
 import { DailySchedule } from './routes/DailySchedule';
 import { FGStock } from './routes/FGStock';
-import { FGHistory } from './routes/FGHistory';
 import { WIP } from './routes/WIP';
 import { WeeklyDemand } from './routes/WeeklyDemand';
 import { ShortageDetail } from './routes/ShortageDetail';
+import { Hotlist } from './routes/Hotlist';
+import { StockRawMaterial } from './routes/StockRawMaterial';
+import { OutstandingPO } from './routes/OutstandingPO';
+import { NpofMaterials } from './routes/NpofMaterials';
+import { MaterialCalc } from './routes/MaterialCalc';
+
+const materialCalcRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: '/material-calculation',
+  beforeLoad: () => {
+    // Menu ini disembunyikan saat flag mati, jadi URL-nya ikut dikunci
+    // supaya tetap bisa diakses hanya lewat alat uji (mis. Postman).
+    if (!isFeatureEnabled('materialCalculation')) throw redirect({ to: '/' });
+  },
+  component: MaterialCalc,
+});
+
+const outstandingPoRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: '/outstanding-po',
+  component: OutstandingPO,
+});
+
+const npofMaterialsRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: '/npof-materials',
+  component: NpofMaterials,
+});
+
+const stockRawMaterialRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: '/stock-raw-material',
+  component: StockRawMaterial,
+});
+
+const hotlistRoute = createRoute({
+  getParentRoute: () => authLayoutRoute,
+  path: '/hotlist',
+  component: Hotlist,
+});
 
 const itemsRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
@@ -85,12 +125,6 @@ const fgStockRoute = createRoute({
   getParentRoute: () => authLayoutRoute,
   path: '/fg-stock',
   component: FGStock,
-});
-
-const fgHistoryRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
-  path: '/fg-history',
-  component: FGHistory,
 });
 
 const wipRoute = createRoute({
@@ -117,26 +151,23 @@ const shortageDetailRoute = createRoute({
   component: ShortageDetail,
 });
 
-const weeklyHistoryRoute = createRoute({
-  getParentRoute: () => authLayoutRoute,
-  path: '/weekly-history',
-  component: WeeklyHistory,
-});
-
 const routeTree = rootRoute.addChildren([
   loginRoute,
   authLayoutRoute.addChildren([
     indexRoute,
     trackingRoute,
+    hotlistRoute,
     itemsRoute,
     dailyScheduleRoute,
     fgStockRoute,
-    fgHistoryRoute,
     wipRoute,
     usersRoute,
     weeklyDemandRoute,
     shortageDetailRoute,
-    weeklyHistoryRoute,
+    stockRawMaterialRoute,
+    outstandingPoRoute,
+    npofMaterialsRoute,
+    materialCalcRoute,
   ]),
 ]);
 

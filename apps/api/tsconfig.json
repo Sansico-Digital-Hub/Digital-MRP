@@ -1,18 +1,31 @@
+/**
+ * Konfigurasi ini dipakai untuk PEMERIKSAAN TIPE (IDE + `npm run typecheck`).
+ * Sengaja mencakup skrip verifikasi di root (verify-*.ts) supaya mereka juga
+ * mendapat tipe @types/node — kalau tidak, editor memasukkan file itu ke
+ * "inferred project" tanpa `process` dan memunculkan error palsu.
+ *
+ * Untuk MENGHASILKAN build (dist/server.js) dipakai `tsconfig.build.json`,
+ * karena `rootDir` di sana harus tepat `./src`.
+ */
 {
   "compilerOptions": {
     "target": "ES2022",
-    "module": "commonjs",
+    "module": "node16",
     "lib": ["ES2022"],
-    "outDir": "./dist",
-    "rootDir": "./src",
     "strict": true,
     "esModuleInterop": true,
     "skipLibCheck": true,
     "forceConsistentCasingInFileNames": true,
     "resolveJsonModule": true,
-    "moduleResolution": "node",
-    "types": ["node"]
+    "moduleResolution": "node16",
+    "types": ["node"],
+    "noEmit": true
   },
-  "include": ["src/**/*"],
-  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+  "include": ["src/**/*", "verify-*.ts", "seed-*.ts"],
+  /**
+   * `verify-pdf-export.ts` memakai modul PDF dari apps/web (bundler resolution +
+   * DOM lib), jadi tidak bisa ikut project ini (moduleResolution node16 + lib ES2022).
+   * Skrip tetap dijalankan dengan tsx: `pnpm --filter @pdits/api verify:pdf-export`.
+   */
+  "exclude": ["node_modules", "dist", "**/*.test.ts", "verify-pdf-export.ts"]
 }

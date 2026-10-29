@@ -1,7 +1,13 @@
 import { config as loadEnv } from 'dotenv';
+import path from 'path';
 
-// Load environment variables
-loadEnv();
+// Di development, ambil variabel dari .env di root monorepo.
+// Di production JANGAN: variabel sudah disuntikkan oleh platform (Dokploy).
+// `override: true` juga sengaja dihapus — kalau tidak, variabel dari platform
+// bisa tertimpa oleh file .env yang tanpa sengaja ikut terbawa ke image.
+if (process.env.NODE_ENV !== 'production') {
+  loadEnv({ path: path.resolve(__dirname, '../../../../.env') });
+}
 
 export const config = {
   // Server
@@ -37,6 +43,52 @@ export const config = {
     wip: 120, // 2 minutes
     tracking: 120, // 2 minutes
     items: 1800, // 30 minutes
+  },
+
+  // NPOF External API
+  npofApi: {
+    url: process.env.NPOF_API_URL || 'http://127.0.0.1:8008',
+    key: process.env.NPOF_API_KEY || '',
+  },
+
+  // Akun SUPER_ADMIN pertama untuk database yang masih kosong (VPS/Dokploy).
+  // Dibiarkan kosong = fitur dilewati. Lihat src/lib/bootstrapAdmin.ts.
+  bootstrapAdmin: {
+    email: process.env.ADMIN_EMAIL || '',
+    password: process.env.ADMIN_PASSWORD || '',
+  },
+
+  // Parameter perhitungan material.
+  materialCalc: {
+    // Toleransi ukuran saat mencocokkan stok ke kebutuhan, dalam cm.
+    sizeToleranceCm: parseInt(process.env.MATERIAL_SIZE_TOLERANCE_CM || '2', 10),
+    // 1 rim dihitung 500 lembar. Dipakai untuk Outstanding PO bersatuan "rim".
+    sheetsPerRim: parseInt(process.env.SHEETS_PER_RIM || '500', 10),
+    // Apakah supplier harus sama agar stok/PO dianggap cocok.
+    // true (DEFAULT sejak 2026-10-15) = pencocokan memakai Item Desc + Supplier,
+    //   sesuai spesifikasi §2 (NPOF dihubungkan ke Stock Raw Material dan
+    //   Outstanding PO lewat Item Desc + Supplier). Nama supplier dibandingkan
+    //   setelah normalisasi `supplierAlias.ts`, jadi "PHIL CORPORATION" tetap
+    //   terbaca sebagai HANCHANG dan "PT. MEGA SURYA ERATAMA" sebagai MEGA.
+    //   Sebelum ini supplier tidak diperiksa, sehingga gulungan 450gsm/120cm
+    //   milik MEGA ikut dipakai di ukuran `120 x 85.5 CM` milik HANCHANG.
+    // false = kembali ke perilaku lama (hanya gramatur + ukuran yang menentukan).
+    requireSupplierMatch: (process.env.MATERIAL_REQUIRE_SUPPLIER || 'true').toLowerCase() === 'true',
+    // Fitur INFORMASI "Rekomendasi Ukuran Material & Waste". Tidak mengubah
+    // angka perhitungan (alokasi, shortage, Stock As Of, End Ind).
+    recommendation: {
+      // Jumlah alternatif ukuran yang dikirim ke UI per grup.
+      maxOptions: parseInt(process.env.MATERIAL_REC_MAX_OPTIONS || '8', 10),
+      // Kelipatan ukuran maksimum yang diuji (mis. 180 cm untuk kebutuhan 59 cm = 3).
+      maxMultiplier: parseInt(process.env.MATERIAL_REC_MAX_MULTIPLIER || '6', 10),
+      // Sertakan ukuran dari NPOF yang belum ada di stok/PO.
+      includeNpof: (process.env.MATERIAL_REC_INCLUDE_NPOF || 'true').toLowerCase() === 'true',
+      // Ukuran standar (cm) yang selalu dipertimbangkan, dipisah koma.
+      standardSizes: (process.env.MATERIAL_REC_STANDARD_SIZES || '180')
+        .split(',')
+        .map((v) => parseFloat(v.trim()))
+        .filter((v) => Number.isFinite(v) && v > 0),
+    },
   },
 };
 

@@ -2,6 +2,7 @@ import { useState, useRef, useEffect } from 'react';
 import { Search, Plus, Check, ChevronDown } from 'lucide-react';
 import { clsx } from 'clsx';
 import { twMerge } from 'tailwind-merge';
+import { useTranslation } from '../i18n';
 
 interface Option {
   value: string;
@@ -27,10 +28,12 @@ export function SearchableSelect({
   value,
   onChange,
   onAdd,
-  placeholder = "Select...",
+  placeholder,
   className,
   disabled = false,
 }: SearchableSelectProps) {
+  const { t } = useTranslation();
+  const placeholderText = placeholder ?? t('common.select');
   const [isOpen, setIsOpen] = useState(false);
   const [search, setSearch] = useState("");
   const containerRef = useRef<HTMLDivElement>(null);
@@ -83,7 +86,7 @@ export function SearchableSelect({
           className
         )}
       >
-        <span className="truncate">{selectedOption ? selectedOption.label : placeholder}</span>
+        <span className="truncate">{selectedOption ? selectedOption.label : placeholderText}</span>
         <ChevronDown className="h-4 w-4 opacity-50" />
       </button>
 
@@ -93,7 +96,7 @@ export function SearchableSelect({
             <Search className="mr-2 h-4 w-4 shrink-0 opacity-50" />
             <input
               className="flex h-10 w-full rounded-md bg-transparent py-3 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed disabled:opacity-50"
-              placeholder="Search..."
+              placeholder={t('common.search')}
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onClick={(e) => e.stopPropagation()}
@@ -103,7 +106,7 @@ export function SearchableSelect({
           <div className="max-h-[200px] overflow-y-auto p-1">
             {filteredOptions.length === 0 && !showAddOption && (
               <div className="py-6 text-center text-sm text-muted-foreground">
-                No results found.
+                {t('components.noOptions')}
               </div>
             )}
             
@@ -133,7 +136,7 @@ export function SearchableSelect({
                 onClick={handleAdd}
               >
                 <Plus className="mr-2 h-4 w-4 shrink-0" />
-                Add "{search}"
+                {t('components.addOption', { value: search })}
               </button>
             )}
           </div>

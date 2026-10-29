@@ -143,9 +143,11 @@ export default async function historyRoutes(server: FastifyInstance) {
     const paginatedItemIds = paginatedItems.map(p => p.item.id);
 
     // 4. Fetch daily WIP only for the paginated items to optimize speed
+    // WIP modul PRODUCTION saja — WIP Material Planning disimpan terpisah.
     const allWip = paginatedItemIds.length > 0 ? await prisma.wIP.findMany({
       where: { 
         itemId: { in: paginatedItemIds },
+        moduleType: 'PRODUCTION',
         date: { lte: targetEndDate }, 
         status: { in: ['IN_PROGRESS', 'ON_HOLD', 'DELAYED'] } 
       },
@@ -209,7 +211,7 @@ export default async function historyRoutes(server: FastifyInstance) {
       results.push({
         itemId: item.id,
         partNumber: item.partNumber,
-        description: item.description,
+        description: item.itemName,
         daily: dailyData,
         summary: {
           weeklyDemand: p.weeklyDemand,

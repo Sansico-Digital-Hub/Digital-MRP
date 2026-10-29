@@ -1,0 +1,17 @@
+/**
+ * Konfigurasi BUILD: hanya `src/` yang di-emit, dengan rootDir `./src`
+ * sehingga output tetap `dist/server.js` (dipakai `npm start` dan Dockerfile.api).
+ *
+ * Skrip verifikasi di root TIDAK ikut di-build (dijalankan lewat tsx), tetapi
+ * tetap diperiksa tipenya oleh `tsconfig.json`.
+ */
+{
+  "extends": "./tsconfig.json",
+  "compilerOptions": {
+    "noEmit": false,
+    "rootDir": "./src",
+    "outDir": "./dist"
+  },
+  "include": ["src/**/*"],
+  "exclude": ["node_modules", "dist", "**/*.test.ts"]
+}

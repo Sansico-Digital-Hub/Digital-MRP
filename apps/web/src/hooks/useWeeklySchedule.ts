@@ -1,5 +1,6 @@
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { fetchApi } from '../lib/api';
+import { PERIOD_QUERY_KEY, type DataModule } from './usePeriods';
 
 export interface WeeklyScheduleRecord {
   itemId: string;
@@ -17,13 +18,54 @@ export interface WeeklyScheduleRecord {
   >;
 }
 
-export function useWeeklyScheduleSummary(year?: number) {
-  return useQuery<{ data: WeeklyScheduleRecord[]; year: number }, Error>({
-    queryKey: ['weeklySchedule', 'summary', year],
-    queryFn: () => {
-      const params = year ? `?year=${year}` : '';
-      return fetchApi(`/weekly-schedule/summary${params}`);
-    },
+export interface WeeklyScheduleWeekColumn {
+  weekNumber: number;
+  weekStartDate: string;
+  weekEndDate: string;
+}
+
+export interface WeeklyScheduleSummaryResponse {
+  data: WeeklyScheduleRecord[];
+  year: number;
+  moduleType: DataModule;
+  /**
+   * Kalender kolom minggu (W1..W26) dari DATA yang diupload — bukan dari tanggal
+   * hari ini. Dipakai halaman 26-Week Demand Plan untuk header kolom supaya
+   * W1 selalu = minggu pertama file import dan minggu tanpa demand tetap tampil.
+   */
+  weeks?: WeeklyScheduleWeekColumn[];
+  /** Tanggal mulai W1 (ISO). null bila periode belum punya data MRP. */
+  periodStart?: string | null;
+  /** Versi snapshot yang menjadi sumber data aktif (null bila belum ada versi). */
+  activeVersion?: {
+    id: string;
+    versionNumber: number;
+    uploadedAt: string;
+    uploadedByName: string | null;
+    fileName: string | null;
+    itemCount: number;
+    totalQty: number;
+  } | null;
+  /** Perubahan terakhir pada data aktif (upload / edit manual / rollback). */
+  lastChange?: {
+    at: string;
+    byName: string | null;
+    kind: 'UPLOAD' | 'EDIT' | 'ROLLBACK' | null;
+  } | null;
+}
+
+/**
+ * Ringkasan MRP untuk SATU periode + SATU modul. `periodId` dan `moduleType`
+ * wajib — tanpa itu demand antar bulan / antar modul akan tercampur.
+ */
+export function useWeeklyScheduleSummary(periodId?: string | null, moduleType: DataModule = 'PRODUCTION') {
+  return useQuery<WeeklyScheduleSummaryResponse, Error>({
+    queryKey: ['weeklySchedule', 'summary', periodId, moduleType],
+    enabled: Boolean(periodId),
+    queryFn: () =>
+      fetchApi(
+        `/weekly-schedule/summary?periodId=${encodeURIComponent(periodId as string)}&moduleType=${moduleType}`,
+      ),
     staleTime: 1000 * 60,
   });
 }
@@ -42,6 +84,10 @@ export function useBulkUpsertWeeklySchedule() {
         quantity: number;
       }>;
       saveMode: 'overwrite' | 'add';
+      /** Replace every MRP row in the selected period/module during Excel overwrite. */
+      replacePeriod?: boolean;
+      periodId: string;
+      moduleType: DataModule;
     }) =>
       fetchApi('/weekly-schedule/bulk', {
         method: 'POST',
@@ -49,6 +95,7 @@ export function useBulkUpsertWeeklySchedule() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['weeklySchedule'] });
+      queryClient.invalidateQueries({ queryKey: PERIOD_QUERY_KEY });
     },
   });
 }
@@ -95,6 +142,8 @@ export function useUpsertWeeklySchedule() {
       toyName?: string;
       quantity: number;
       saveMode?: 'overwrite' | 'add';
+      periodId: string;
+      moduleType: DataModule;
     }) =>
       fetchApi('/weekly-schedule', {
         method: 'POST',
@@ -102,6 +151,7 @@ export function useUpsertWeeklySchedule() {
       }),
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ['weeklySchedule'] });
+      queryClient.invalidateQueries({ queryKey: PERIOD_QUERY_KEY });
     },
   });
 }
