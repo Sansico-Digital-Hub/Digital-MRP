@@ -9,12 +9,78 @@ if (process.env.NODE_ENV !== 'production') {
   loadEnv({ path: path.resolve(__dirname, '../../../../.env') });
 }
 
+const isProduction = process.env.NODE_ENV === 'production';
+
+/**
+ * Nilai cadangan HANYA untuk development. Isinya sengaja berbeda dari nilai
+ * lama yang dulu dipakai, supaya token lama tidak berlaku lagi.
+ */
+const DEV_ACCESS_SECRET = 'dev-only-access-secret-do-not-use-in-production';
+const DEV_REFRESH_SECRET = 'dev-only-refresh-secret-do-not-use-in-production';
+
+/**
+ * Ambil secret JWT dan HENTIKAN proses kalau tidak layak dipakai.
+ *
+ * Kenapa harus berhenti, bukan sekadar memberi peringatan: sebelumnya nilai
+ * cadangan dipakai diam-diam, sehingga server produksi bisa berjalan dengan
+ * secret yang tertulis di repo. Akibatnya siapa pun bisa membuat token sendiri
+ * dan masuk sebagai user mana pun tanpa login, tanpa satu pun tanda di log.
+ */
+function resolveSecret(name: string, raw: string | undefined, devFallback: string): string {
+  const value = (raw ?? '').trim();
+
+  if (value === '') {
+    if (isProduction) {
+      throw new Error(
+        `${name} WAJIB diisi saat NODE_ENV=production. ` +
+          'Buat nilainya dengan: openssl rand -base64 48'
+      );
+    }
+    return devFallback;
+  }
+
+  if (isProduction && value.length < 32) {
+    throw new Error(
+      `${name} terlalu pendek (${value.length} karakter). Minimal 32 karakter saat produksi. ` +
+        'Buat nilainya dengan: openssl rand -base64 48'
+    );
+  }
+
+  return value;
+}
+
+const jwtSecret = resolveSecret('JWT_SECRET', process.env.JWT_SECRET, DEV_ACCESS_SECRET);
+const jwtRefreshSecret = resolveSecret(
+  'JWT_REFRESH_SECRET',
+  process.env.JWT_REFRESH_SECRET,
+  DEV_REFRESH_SECRET
+);
+
+if (isProduction && jwtSecret === jwtRefreshSecret) {
+  throw new Error(
+    'JWT_SECRET dan JWT_REFRESH_SECRET tidak boleh sama. ' +
+      'Pakai dua nilai berbeda (masing-masing: openssl rand -base64 48).'
+  );
+}
+
+/**
+ * CORS_ORIGIN boleh berisi lebih dari satu domain, dipisah koma. Garis miring
+ * di akhir dibuang karena browser mengirim Origin tanpa garis miring, sehingga
+ * "https://app.domain.com/" tidak akan pernah cocok dan login gagal dengan
+ * pesan CORS yang membingungkan.
+ */
+const corsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
+  .split(',')
+  .map((origin) => origin.trim().replace(/\/+$/, ''))
+  .filter((origin) => origin !== '');
+
 export const config = {
   // Server
   port: parseInt(process.env.PORT || '3001', 10),
   nodeEnv: process.env.NODE_ENV || 'development',
-  frontendUrl: process.env.FRONTEND_URL || 'http://localhost:5173',
-  corsOrigin: process.env.CORS_ORIGIN || 'http://localhost:5173',
+  frontendUrl: (process.env.FRONTEND_URL || 'http://localhost:5173').replace(/\/+$/, ''),
+  corsOrigin: corsOrigins[0],
+  corsOrigins,
 
   // Database
   databaseUrl: process.env.DATABASE_URL!,
@@ -24,10 +90,19 @@ export const config = {
 
   // JWT
   jwt: {
-    secret: process.env.JWT_SECRET || 'your-secret-key-change-in-production',
-    refreshSecret: process.env.JWT_REFRESH_SECRET || 'your-refresh-secret-key',
+    secret: jwtSecret,
+    refreshSecret: jwtRefreshSecret,
     accessExpiry: process.env.JWT_ACCESS_EXPIRY || '5h',
     refreshExpiry: process.env.JWT_REFRESH_EXPIRY || '7d',
+  },
+
+  // Refresh token disimpan di cookie httpOnly, tidak lagi di localStorage.
+  // Path dibatasi ke /api/v1/auth supaya cookie tidak ikut terkirim pada
+  // setiap request API biasa.
+  refreshCookie: {
+    name: 'pdits_rt',
+    path: '/api/v1/auth',
+    maxAgeSeconds: 7 * 24 * 60 * 60,
   },
 
   // VAPID (Web Push)

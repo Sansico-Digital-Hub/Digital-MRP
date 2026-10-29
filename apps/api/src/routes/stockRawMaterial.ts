@@ -8,6 +8,7 @@ import { canonicalSupplier, supplierOk } from '../lib/supplierAlias';
 import { matchSize, parseDims, parseGsm } from '../lib/materialSizeMatch';
 import { sizeRatio, wasteOfUsage } from '../lib/materialSizeRecommendation';
 import { buildStockUsage } from '../lib/stockUsage';
+import { readExcelUpload } from '../lib/uploadExcel';
 import * as xlsx from 'xlsx';
 
 export default async function stockRawMaterialRoutes(server: FastifyInstance) {
@@ -395,13 +396,14 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
   // Upload Excel
   server.post('/api/v1/stock-raw-material/upload', { preValidation: [authenticate] }, async (request, reply) => {
     try {
-      const data = await request.file();
-      if (!data) {
-        return reply.code(400).send({ error: 'Bad Request', message: 'No file uploaded' });
+      const upload = await readExcelUpload(request);
+      if (!upload.ok) {
+        return reply
+          .code(upload.status)
+          .send({ error: upload.status === 413 ? 'Payload Too Large' : 'Bad Request', message: upload.message });
       }
 
-      const buffer = await data.toBuffer();
-      const workbook = xlsx.read(buffer, { type: 'buffer' });
+      const workbook = xlsx.read(upload.buffer, { type: 'buffer' });
 
       /**
        * Pencocokan header TIDAK peduli huruf besar/kecil, spasi di awal/akhir,

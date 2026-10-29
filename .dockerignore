@@ -33,3 +33,12 @@ _prod_check2
 .vscode
 .idea
 *.timestamp-*.mjs
+
+# Skrip bantu & patch lokal yang tidak dipakai saat build/runtime.
+# Tanpa pola ini semuanya ikut ter-COPY ke dalam image build context.
+*.patch
+*.py
+drop.js
+test-excel.ts
+update_route.py
+

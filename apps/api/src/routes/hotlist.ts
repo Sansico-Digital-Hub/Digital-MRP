@@ -3,6 +3,7 @@ import prisma from '../lib/prisma';
 import { authenticate, requireRole } from '../middleware/auth';
 import { EDIT_ROLES } from '../lib/permissions';
 import { resolveUploadPeriod, recordPeriodChange, touchPeriod } from '../lib/periodScope';
+import { readExcelUpload } from '../lib/uploadExcel';
 import * as xlsx from 'xlsx';
 
 export default async function hotlistRoutes(server: FastifyInstance) {
@@ -19,16 +20,15 @@ export default async function hotlistRoutes(server: FastifyInstance) {
   // Upload Excel
   server.post('/api/v1/hotlist/upload', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
     try {
-      const data = await request.file();
-      if (!data) {
-        return reply.code(400).send({ error: 'Bad Request', message: 'No file uploaded' });
+      const upload = await readExcelUpload(request);
+      if (!upload.ok) {
+        return reply
+          .code(upload.status)
+          .send({ error: upload.status === 413 ? 'Payload Too Large' : 'Bad Request', message: upload.message });
       }
 
-      // Read file buffer
-      const buffer = await data.toBuffer();
-      
       // Parse excel
-      const workbook = xlsx.read(buffer, { type: 'buffer' });
+      const workbook = xlsx.read(upload.buffer, { type: 'buffer' });
       const sheetName = workbook.SheetNames[0];
       const sheet = workbook.Sheets[sheetName];
       

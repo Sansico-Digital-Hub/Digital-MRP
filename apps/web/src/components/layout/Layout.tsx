@@ -3,6 +3,7 @@ import { LayoutDashboard, Activity, Users, Bell, LogOut, Settings, CalendarClock
 import { cn } from '../../lib/utils';
 import { useAuthStore } from '../../stores/authStore';
 import type { ModuleName } from '../../stores/authStore';
+import { logoutSession } from '../../lib/api';
 import { isFeatureEnabled, type FeatureName } from '../../lib/features';
 import { useNavigationStore } from '../../stores/navigationStore';
 import { useEffect, useState } from 'react';
@@ -65,7 +66,7 @@ export function Layout() {
   const pathname = routerState.location.pathname;
 
   const { t } = useTranslation();
-  const { user, logout, canView, canEdit } = useAuthStore();
+  const { user, canView, canEdit } = useAuthStore();
   const { activeModule, setActiveModule } = useNavigationStore();
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [masterDataFilter, setMasterDataFilter] = useState<'all' | 'production' | 'material'>('all');
@@ -86,7 +87,8 @@ export function Layout() {
   }, [pathname, activeModule, setActiveModule]);
 
   const handleLogout = () => {
-    logout();
+    // Hapus cookie refresh di server, lalu bersihkan state lokal.
+    void logoutSession();
     router.navigate({ to: '/login' });
   };
 

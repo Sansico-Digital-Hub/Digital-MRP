@@ -28,6 +28,14 @@ Complete index untuk semua dokumentasi PDITS.
 - Troubleshooting lengkap
 - Verification checklist
 
+### 4. [DEPLOY_DOKPLOY.md](DEPLOY_DOKPLOY.md) 🚀
+**Panduan deploy ke VPS dengan Dokploy**
+- Prasyarat VPS & DNS
+- Variabel environment produksi
+- Domain + HTTPS (Traefik)
+- Verifikasi, backup, dan troubleshooting
+- Checklist keamanan sebelum go-live
+
 ---
 
 ## 📖 Understanding the System

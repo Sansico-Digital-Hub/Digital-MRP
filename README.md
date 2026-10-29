@@ -199,29 +199,40 @@ pnpm build:api
 
 ## 🐳 Docker Deployment
 
-Lihat `PDITS_TechStack.md` Section 10 untuk detail deployment dengan Dokploy.
+Panduan lengkap deploy ke VPS dengan Dokploy: **[DEPLOY_DOKPLOY.md](./DEPLOY_DOKPLOY.md)**
 
-### Build Docker Images
+File yang dipakai saat deploy (semua di root repo):
 
-**Frontend:**
+| File | Keterangan |
+|---|---|
+| `docker-compose.dokploy.yml` | Compose untuk Dokploy (isi ini di field **Compose Path**) |
+| `Dockerfile.api` | Image API (Node 22 + Prisma, non-root) |
+| `Dockerfile.web` | Image web (Vite build → nginx) |
+| `nginx.conf` | Konfigurasi nginx + header keamanan |
+| `.env.production.example` | Daftar variabel environment untuk tab Environment Dokploy |
+
+> `docker-compose.yml` hanya untuk **development** (MySQL mempublikasikan port
+> 3306 dengan password contoh). Jangan dipakai di server.
+
+### Build Docker Images (lokal)
+
 ```bash
-docker build -f apps/web/Dockerfile -t pdits-web .
+docker build -f Dockerfile.web -t pdits-web .
+docker build -f Dockerfile.api -t pdits-api .
 ```
 
-**Backend:**
-```bash
-docker build -f apps/api/Dockerfile -t pdits-api .
-```
+## 🔐 Default Users (Hanya untuk Development)
 
-## 🔐 Default Users (Setelah Seed)
-
-Akan dibuat setelah migration pertama:
+Akun contoh di bawah dibuat oleh `prisma/seed.ts`, **khusus database lokal**:
 
 - **Super Admin:** admin@pdits.com / password123
 - **Admin:** dataentry@pdits.com / password123
 - **User:** user@pdits.com / password123
 
-⚠️ **PENTING:** Ganti password default setelah login pertama!
+> ⚠️ **Jangan pernah menjalankan `prisma:seed` di server produksi.**
+> Di produksi, akun pertama dibuat otomatis dari `ADMIN_EMAIL` / `ADMIN_PASSWORD`
+> (lihat `apps/api/src/lib/bootstrapAdmin.ts`) hanya ketika tabel `users` masih
+> kosong. Setelah login pertama, segera ganti password lewat menu Users.
 
 ## 📊 Features
 
