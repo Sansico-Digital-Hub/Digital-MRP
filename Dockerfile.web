@@ -9,11 +9,14 @@ COPY . .
 RUN --mount=type=cache,id=pnpm,target=/pnpm/store pnpm install --frozen-lockfile
 
 # Vite menanamkan nilai env SAAT BUILD, bukan saat runtime. Jadi VITE_API_URL
-# harus ada di tahap ini. Di Dokploy isi lewat tab Environment ->
-# "Build Time Arguments" (ARG), bukan lewat runtime environment variable.
+# dan VITE_ENABLE_MATERIAL_CALC harus ada di tahap ini. Di Dokploy isi lewat
+# tab Environment; compose meneruskannya sebagai build arg
+# (lihat docker-compose.dokploy.yml -> services.web.build.args).
 # Default di bawah hanya fallback untuk build lokal.
 ARG VITE_API_URL=http://localhost:3001/api/v1
+ARG VITE_ENABLE_MATERIAL_CALC=true
 ENV VITE_API_URL=$VITE_API_URL
+ENV VITE_ENABLE_MATERIAL_CALC=$VITE_ENABLE_MATERIAL_CALC
 
 # Build shared packages and frontend web
 RUN pnpm --filter @pdits/shared build

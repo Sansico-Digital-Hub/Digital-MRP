@@ -29,12 +29,13 @@ export function Login() {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email, password }),
+        credentials: 'include',
       }).then((res) => {
         if (!res.ok) throw new Error(t('login.errors.invalidCredentials'));
         return res.json();
       });
 
-      setAuth(data.user, data.accessToken, data.refreshToken);
+      setAuth(data.user, data.accessToken);
       router.navigate({ to: '/' });
     } catch (err: any) {
       setError(err.message || t('login.errors.failed'));

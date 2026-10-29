@@ -12,7 +12,8 @@
     "verify:po-number": "tsx verify-po-number.ts",
     "verify:cycle-isolation": "tsx verify-cycle-isolation.ts",
     "verify:ref-b": "tsx verify-ref-b.ts",
-    "verify:stock-usage": "tsx verify-stock-usage.ts",    "verify:npof-coverage": "tsx verify-npof-coverage.ts",
+    "verify:stock-usage": "tsx verify-stock-usage.ts",
+    "verify:npof-coverage": "tsx verify-npof-coverage.ts",
     "verify:pdf-export": "tsx verify-pdf-export.ts",
     "seed:npof-testing": "tsx seed-npof-testing.ts",
     "test": "vitest",
@@ -27,11 +28,12 @@
     "seed": "tsx prisma/seed.ts"
   },
   "dependencies": {
-    "@pdits/shared": "workspace:*",
+    "@fastify/cookie": "^9.4.0",
     "@fastify/cors": "^9.0.1",
     "@fastify/helmet": "^11.1.1",
     "@fastify/multipart": "^8.1.0",
     "@fastify/rate-limit": "^9.1.0",
+    "@pdits/shared": "workspace:*",
     "@prisma/client": "^5.9.1",
     "@scalar/fastify-api-reference": "^1.24.0",
     "bcryptjs": "^2.4.3",
@@ -44,7 +46,7 @@
     "pino-pretty": "^10.3.1",
     "prisma": "^5.9.1",
     "web-push": "^3.6.7",
-    "xlsx": "^0.18.5",
+    "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz",
     "zod": "^3.22.4"
   },
   "devDependencies": {

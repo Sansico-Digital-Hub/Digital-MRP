@@ -23,8 +23,12 @@ services:
     environment:
       MYSQL_DATABASE: ${MYSQL_DATABASE:-planner_project}
       MYSQL_USER: ${MYSQL_USER:-pdits}
-      MYSQL_PASSWORD: ${MYSQL_PASSWORD}
-      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD}
+      # Sintaks ${VAR:?pesan} membuat `docker compose up` LANGSUNG GAGAL dengan
+      # pesan jelas kalau variabel belum diisi di tab Environment Dokploy.
+      # Tanpa ini, container tetap start dengan nilai kosong dan bug-nya baru
+      # terlihat belakangan (sulit dilacak).
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:?MYSQL_PASSWORD wajib diisi di tab Environment}
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:?MYSQL_ROOT_PASSWORD wajib diisi di tab Environment}
     volumes:
       - mysql_data:/var/lib/mysql
     networks:
@@ -43,13 +47,22 @@ services:
     restart: unless-stopped
     # Redis hanya dipakai internal, jadi jangan dipublikasikan ke host.
     # Kalau butuh akses luar, pakai jaringan internal bukan port publik.
-    command: ["redis-server", "--save", "60", "1", "--loglevel", "warning"]
+    #
+    # requirepass penting karena `dokploy-network` dipakai bersama oleh semua
+    # project di server yang sama: tanpa password, container project lain bisa
+    # membaca/menghapus cache milik aplikasi ini.
+    # $$ dipakai supaya Docker Compose tidak ikut mengganti nilainya; yang
+    # membaca variabel adalah shell di dalam container.
+    environment:
+      REDIS_PASSWORD: ${REDIS_PASSWORD:?REDIS_PASSWORD wajib diisi di tab Environment}
+    command:
+      ["sh", "-c", "exec redis-server --save 60 1 --loglevel warning --requirepass \"$$REDIS_PASSWORD\""]
     volumes:
       - redis_data:/data
     networks:
       - dokploy-network
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", "redis-cli -a \"$$REDIS_PASSWORD\" --no-auth-warning ping | grep -q PONG"]
       interval: 10s
       timeout: 3s
       retries: 5
@@ -71,14 +84,17 @@ services:
       NODE_ENV: production
       PORT: 3001
       # Host "mysql" adalah nama service di file ini.
-      DATABASE_URL: mysql://${MYSQL_USER:-pdits}:${MYSQL_PASSWORD}@mysql:3306/${MYSQL_DATABASE:-planner_project}
-      REDIS_URL: redis://redis:6379
-      # WAJIB diisi. Tanpa ini JWT memakai nilai default yang ada di kode
-      # sehingga siapa pun bisa memalsukan token.
-      JWT_SECRET: ${JWT_SECRET}
-      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET}
+      DATABASE_URL: mysql://${MYSQL_USER:-pdits}:${MYSQL_PASSWORD:?MYSQL_PASSWORD wajib diisi}@mysql:3306/${MYSQL_DATABASE:-planner_project}
+      # Redis sekarang memakai password (lihat service redis di atas).
+      REDIS_URL: redis://:${REDIS_PASSWORD:?REDIS_PASSWORD wajib diisi}@redis:6379
+      # WAJIB diisi. Tanpa ini API menolak start (lihat apps/api/src/config),
+      # karena dulu nilai cadangan dipakai diam-diam sehingga token JWT bisa
+      # dipalsukan siapa saja yang membaca repo ini.
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET wajib diisi di tab Environment}
+      JWT_REFRESH_SECRET: ${JWT_REFRESH_SECRET:?JWT_REFRESH_SECRET wajib diisi di tab Environment}
       # Domain web yang boleh mengakses API (dipakai saat NODE_ENV=production).
-      CORS_ORIGIN: ${CORS_ORIGIN}
+      # Boleh lebih dari satu, dipisah koma.
+      CORS_ORIGIN: ${CORS_ORIGIN:?CORS_ORIGIN wajib diisi, contoh https://app.domain-anda.com}
       FRONTEND_URL: ${FRONTEND_URL}
       # Akun admin pertama. Hanya dipakai saat tabel users masih kosong.
       ADMIN_EMAIL: ${ADMIN_EMAIL}
@@ -92,6 +108,20 @@ services:
       VAPID_SUBJECT: ${VAPID_SUBJECT}
     networks:
       - dokploy-network
+    healthcheck:
+      # Dipakai Dokploy untuk memastikan container benar-benar siap melayani,
+      # bukan sekadar "proses hidup". Endpoint ini juga menguji koneksi MySQL.
+      # start_period dibuat longgar karena container menjalankan
+      # `prisma migrate deploy` lebih dulu.
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3001/api/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 120s
 
   web:
     build:
@@ -100,7 +130,10 @@ services:
       args:
         # Vite menanamkan nilai ini saat build, jadi harus diberikan di sini.
         # Isi dengan URL publik API, contoh: https://api.domain-anda.com/api/v1
-        VITE_API_URL: ${VITE_API_URL}
+        VITE_API_URL: ${VITE_API_URL:?VITE_API_URL wajib diisi, contoh https://api.domain-anda.com/api/v1}
+        # false = menu Material Calculation disembunyikan. Nilai ini menempel
+        # pada bundle saat build, jadi mengubahnya perlu deploy ulang (rebuild).
+        VITE_ENABLE_MATERIAL_CALC: ${VITE_ENABLE_MATERIAL_CALC:-false}
     restart: unless-stopped
     depends_on:
       - api

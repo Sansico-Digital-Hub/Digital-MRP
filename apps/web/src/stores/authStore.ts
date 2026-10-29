@@ -72,10 +72,9 @@ interface User {
 interface AuthState {
   user: User | null;
   accessToken: string | null;
-  refreshToken: string | null;
-  
+
   // Actions
-  setAuth: (user: User, accessToken: string, refreshToken: string) => void;
+  setAuth: (user: User, accessToken: string) => void;
   logout: () => void;
   updateAccessToken: (token: string) => void;
   
@@ -93,10 +92,9 @@ export const useAuthStore = create<AuthState>()(
     (set, get) => ({
       user: null,
       accessToken: null,
-      refreshToken: null,
-      
-      setAuth: (user, accessToken, refreshToken) => set({ user, accessToken, refreshToken }),
-      logout: () => set({ user: null, accessToken: null, refreshToken: null }),
+
+      setAuth: (user, accessToken) => set({ user, accessToken }),
+      logout: () => set({ user: null, accessToken: null }),
       updateAccessToken: (accessToken) => set({ accessToken }),
       
       /**
@@ -159,6 +157,25 @@ export const useAuthStore = create<AuthState>()(
     }),
     {
       name: 'auth-storage',
+      /**
+       * Hanya `user` (nama/email/role) yang disimpan di localStorage.
+       *
+       * Access token dan refresh token TIDAK lagi dipersist:
+       *  - access token hidup di memori saja (hilang saat tab ditutup)
+       *  - refresh token disimpan API sebagai cookie httpOnly sehingga tidak
+       *    bisa dibaca JavaScript
+       * Saat halaman dimuat ulang, sesi dipulihkan lewat /auth/refresh
+       * (lihat lib/session.ts) memakai cookie tersebut.
+       */
+      partialize: (state) => ({ user: state.user }) as AuthState,
+      // Naikkan versi setiap kali bentuk data tersimpan berubah. Data lama
+      // (yang masih berisi accessToken/refreshToken di localStorage) dibuang
+      // saat rehidrasi, sehingga token lama tidak tertinggal di browser user.
+      version: 2,
+      migrate: (persisted) => {
+        const legacy = (persisted ?? {}) as { user?: User | null };
+        return { user: legacy.user ?? null } as AuthState;
+      },
     }
   )
 );

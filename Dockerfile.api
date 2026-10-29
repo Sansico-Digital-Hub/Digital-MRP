@@ -45,7 +45,15 @@ WORKDIR /app
 
 # Hanya hasil deploy yang disalin: sudah berisi dist/, prisma/ (schema +
 # migrations), dan node_modules produksi.
-COPY --from=builder /prod/api /app
+COPY --from=builder --chown=node:node /prod/api /app
+
+# /app sendiri dibuat oleh WORKDIR sebagai root; samakan pemiliknya supaya
+# Prisma bisa menulis cache bila perlu.
+RUN chown node:node /app
+
+# Jalankan sebagai user non-root. Kalau proses Node berhasil dieksploitasi,
+# penyerang tidak langsung menjadi root di dalam container.
+USER node
 
 EXPOSE 3001
 
