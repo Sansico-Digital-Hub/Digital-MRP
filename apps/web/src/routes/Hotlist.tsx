@@ -2,12 +2,18 @@ import { useEffect, useState, useRef } from 'react';
 import { useHotlist, useUploadHotlist, useAddManualHotlist, useUpdateHotlist, useDeleteHotlist, useBulkDeleteHotlist, useImportHotlist, type HotlistData } from '../hooks/useHotlist';
 import { usePeriods, useCreatePeriod, monthLabel, periodDisplayLabel } from '../hooks/usePeriods';
 import { PeriodSelect } from '../components/PeriodSelect';
+import { PeriodMeta } from '../components/PeriodMeta';
 import { FileSpreadsheet, Plus, Upload, Loader2, Search, Pencil, Trash2, X, Check, Save, Folder, ArrowLeft, CalendarPlus, Lock } from 'lucide-react';
 import { format } from 'date-fns';
 import { useTranslation } from '../i18n';
+import { useAuthStore } from '../stores/authStore';
 
 export function Hotlist() {
   const { t, lang, locale, dateLocale } = useTranslation();
+  // Master Data "BI TOTAL" hanya boleh diubah oleh Admin & Material Planner;
+  // Production Planner / User view-only.
+  const canEditDataModule = useAuthStore((state) => state.canEditDataModule);
+  const canManageData = canEditDataModule('MATERIAL');
   // Periode = keranjang data. WAJIB dipilih sebelum upload/isi manual.
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
   // Periode tujuan untuk Import Excel / Isi Manual. Ikut periode yang sedang
@@ -275,50 +281,55 @@ export function Hotlist() {
     record.partNumber.toLowerCase().includes(previewSearchTerm.toLowerCase())
   );
 
+  /** Jumlah kolom tabel utama: checkbox + Part Number + Tanggal + BI Total + Aksi. */
+  const tableColCount = canManageData ? 5 : 3;
+
   return (
     <div className="space-y-6">
       {/* Page Title & Breadcrumb */}
       <div className="flex flex-col md:flex-row md:items-center md:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold tracking-tight">HOTLIST</h1>
+          <h1 className="text-2xl font-bold tracking-tight">BI TOTAL (DLV + Finish Goods)</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
             {t('hotlist.subtitle')}
           </p>
         </div>
         
-        <div className="flex gap-2">
-          <input
-            type="file"
-            ref={fileInputRef}
-            className="hidden"
-            accept=".xlsx, .xls, .xlsm"
-            onChange={handleFileUpload}
-          />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploadMutation.isPending || previewData.length > 0}
-            className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground hover:bg-secondary/80 rounded-md font-medium text-sm transition-colors"
-          >
-            {uploadMutation.isPending ? (
-              <Loader2 className="w-4 h-4 animate-spin" />
-            ) : (
-              <Upload className="w-4 h-4" />
-            )}
-            {t('hotlist.uploadExcel')}
-          </button>
-          
-          <button
-            onClick={() => setIsManualOpen(!isManualOpen)}
-            disabled={previewData.length > 0}
-            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md font-medium text-sm transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            {t('hotlist.manualEntry')}
-          </button>
-        </div>
+        {canManageData && (
+          <div className="flex gap-2">
+            <input
+              type="file"
+              ref={fileInputRef}
+              className="hidden"
+              accept=".xlsx, .xls, .xlsm"
+              onChange={handleFileUpload}
+            />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadMutation.isPending || previewData.length > 0}
+              className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground hover:bg-secondary/80 rounded-md font-medium text-sm transition-colors"
+            >
+              {uploadMutation.isPending ? (
+                <Loader2 className="w-4 h-4 animate-spin" />
+              ) : (
+                <Upload className="w-4 h-4" />
+              )}
+              {t('hotlist.uploadExcel')}
+            </button>
+
+            <button
+              onClick={() => setIsManualOpen(!isManualOpen)}
+              disabled={previewData.length > 0}
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md font-medium text-sm transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              {t('hotlist.manualEntry')}
+            </button>
+          </div>
+        )}
       </div>
 
-      {previewData.length > 0 ? (
+      {canManageData && previewData.length > 0 ? (
         <div className="bg-card border border-primary/20 rounded-lg shadow-md overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
           <div className="p-5 border-b bg-primary/5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
@@ -434,7 +445,7 @@ export function Hotlist() {
       ) : (
         <>
           {/* Manual Entry Form */}
-          {isManualOpen && (
+          {canManageData && isManualOpen && (
             <div className="bg-card border rounded-lg p-5 shadow-sm animate-in slide-in-from-top-2">
               <h2 className="text-sm font-semibold mb-4">{t('hotlist.manual.title')}</h2>
               <form onSubmit={handleManualSubmit} className="grid grid-cols-1 md:grid-cols-4 gap-4 items-end">
@@ -509,17 +520,17 @@ export function Hotlist() {
                   </p>
                 </div>
               )}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                 {periods.map((p) => (
                   <div
                     key={p.id}
                     onClick={() => setSelectedPeriodId(p.id)}
-                    className="cursor-pointer p-5 border rounded-lg bg-card hover:bg-muted/50 hover:border-primary/50 transition-all flex items-center gap-4 group shadow-sm"
+                    className="cursor-pointer p-5 border rounded-lg bg-card hover:bg-muted/50 hover:border-primary/50 transition-all flex flex-wrap items-center gap-x-4 gap-y-2 group shadow-sm"
                   >
                     <div className="p-3 bg-blue-500/10 rounded-lg group-hover:bg-blue-500/20 transition-colors">
                       <Folder className="w-8 h-8 text-blue-500 fill-blue-500/20" />
                     </div>
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <h3 className="font-semibold text-foreground flex items-center gap-1.5">
                         <span className="truncate">{periodDisplayLabel(p, lang)}</span>
                         {p.isLocked && <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
@@ -528,28 +539,31 @@ export function Hotlist() {
                         {t('hotlist.period.counts', { hotlist: p.counts.HOTLIST, mrp: p.counts.MRP })}
                       </p>
                     </div>
+                    <PeriodMeta period={p} className="w-full" />
                   </div>
                 ))}
 
-                <div className="p-5 border-2 border-dashed rounded-lg bg-card flex flex-col gap-3 justify-center">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                    <CalendarPlus className="w-4 h-4" /> {t('hotlist.period.createTitle')}
+                {canManageData && (
+                  <div className="p-5 border-2 border-dashed rounded-lg bg-card flex flex-col gap-3 justify-center">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+                      <CalendarPlus className="w-4 h-4" /> {t('hotlist.period.createTitle')}
+                    </div>
+                    <input
+                      type="month"
+                      value={newPeriodMonth}
+                      onChange={(e) => setNewPeriodMonth(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    <button
+                      onClick={handleCreatePeriod}
+                      disabled={!newPeriodMonth || createPeriod.isPending}
+                      className="w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center gap-2"
+                    >
+                      {createPeriod.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                      {t('hotlist.period.create')} {newPeriodMonth ? monthLabel(newPeriodMonth, lang) : t('hotlist.period.fallbackLabel')}
+                    </button>
                   </div>
-                  <input
-                    type="month"
-                    value={newPeriodMonth}
-                    onChange={(e) => setNewPeriodMonth(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                  <button
-                    onClick={handleCreatePeriod}
-                    disabled={!newPeriodMonth || createPeriod.isPending}
-                    className="w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center gap-2"
-                  >
-                    {createPeriod.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                    {t('hotlist.period.create')} {newPeriodMonth ? monthLabel(newPeriodMonth, lang) : t('hotlist.period.fallbackLabel')}
-                  </button>
-                </div>
+                )}
               </div>
             </div>
           ) : (
@@ -575,7 +589,7 @@ export function Hotlist() {
                   </div>
                 </div>
               <div className="flex items-center gap-3">
-                {selectedIds.length > 0 && (
+                {canManageData && selectedIds.length > 0 && (
                   <button
                     onClick={handleBulkDelete}
                     disabled={bulkDeleteMutation.isPending}
@@ -595,31 +609,35 @@ export function Hotlist() {
               <table className="w-full text-sm text-left">
                 <thead className="text-xs text-muted-foreground uppercase bg-secondary/50">
                   <tr>
-                    <th className="px-4 py-4 w-12 text-center">
-                      <input 
-                        type="checkbox" 
-                        className="rounded border-gray-300 w-4 h-4"
-                        checked={filteredRecords.length > 0 && selectedIds.length === filteredRecords.length}
-                        onChange={handleSelectAll}
-                      />
-                    </th>
+                    {canManageData && (
+                      <th className="px-4 py-4 w-12 text-center">
+                        <input 
+                          type="checkbox" 
+                          className="rounded border-gray-300 w-4 h-4"
+                          checked={filteredRecords.length > 0 && selectedIds.length === filteredRecords.length}
+                          onChange={handleSelectAll}
+                        />
+                      </th>
+                    )}
                     <th className="px-6 py-4 font-semibold w-1/3">{t('hotlist.table.partNumber')}</th>
                     <th className="px-6 py-4 font-semibold">{t('common.date')}</th>
                     <th className="px-6 py-4 font-semibold">{t('hotlist.table.biTotal')}</th>
-                    <th className="px-6 py-4 font-semibold text-right">{t('common.actions')}</th>
+                    {canManageData && (
+                      <th className="px-6 py-4 font-semibold text-right">{t('common.actions')}</th>
+                    )}
                   </tr>
                 </thead>
                 <tbody className="divide-y">
                   {isLoading ? (
                     <tr>
-                      <td colSpan={5} className="px-6 py-12 text-center text-muted-foreground">
+                      <td colSpan={tableColCount} className="px-6 py-12 text-center text-muted-foreground">
                         <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" />
                         <p className="mt-2 text-sm font-medium">{t('common.loading')}</p>
                       </td>
                     </tr>
                   ) : filteredRecords.length === 0 ? (
                     <tr>
-                      <td colSpan={5} className="px-6 py-12 text-center text-muted-foreground">
+                      <td colSpan={tableColCount} className="px-6 py-12 text-center text-muted-foreground">
                         <FileSpreadsheet className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
                         <p className="text-base font-semibold">{t('hotlist.empty.title')}</p>
                         <p className="text-sm mt-1">{t('hotlist.empty.hint')}</p>
@@ -628,14 +646,16 @@ export function Hotlist() {
                   ) : (
                     filteredRecords.map((record) => (
                       <tr key={record.id} className="hover:bg-muted/30 transition-colors">
-                        <td className="px-4 py-3 text-center">
-                          <input 
-                            type="checkbox" 
-                            className="rounded border-gray-300 w-4 h-4"
-                            checked={selectedIds.includes(record.id)}
-                            onChange={(e) => handleSelectOne(e, record.id)}
-                          />
-                        </td>
+                        {canManageData && (
+                          <td className="px-4 py-3 text-center">
+                            <input 
+                              type="checkbox" 
+                              className="rounded border-gray-300 w-4 h-4"
+                              checked={selectedIds.includes(record.id)}
+                              onChange={(e) => handleSelectOne(e, record.id)}
+                            />
+                          </td>
+                        )}
                         {editingId === record.id ? (
                           <>
                             <td className="px-6 py-3">
@@ -702,29 +722,31 @@ export function Hotlist() {
                             <td className="px-6 py-3">
                               <span className="font-bold">{record.biTotal.toLocaleString(locale, { minimumFractionDigits: 1, maximumFractionDigits: 2 })}</span>
                             </td>
-                            <td className="px-6 py-3 text-right">
-                              <div className="flex items-center justify-end gap-1">
-                                <button
-                                  onClick={() => handleEditClick(record)}
-                                  className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition-colors"
-                                  title={t('common.edit')}
-                                >
-                                  <Pencil className="w-4 h-4" />
-                                </button>
-                                <button
-                                  onClick={() => handleDelete(record.id)}
-                                  disabled={deleteMutation.isPending && deleteMutation.variables === record.id}
-                                  className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
-                                  title={t('common.delete')}
-                                >
-                                  {deleteMutation.isPending && deleteMutation.variables === record.id ? (
-                                    <Loader2 className="w-4 h-4 animate-spin text-destructive" />
-                                  ) : (
-                                    <Trash2 className="w-4 h-4" />
-                                  )}
-                                </button>
-                              </div>
-                            </td>
+                            {canManageData && (
+                              <td className="px-6 py-3 text-right">
+                                <div className="flex items-center justify-end gap-1">
+                                  <button
+                                    onClick={() => handleEditClick(record)}
+                                    className="p-1.5 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition-colors"
+                                    title={t('common.edit')}
+                                  >
+                                    <Pencil className="w-4 h-4" />
+                                  </button>
+                                  <button
+                                    onClick={() => handleDelete(record.id)}
+                                    disabled={deleteMutation.isPending && deleteMutation.variables === record.id}
+                                    className="p-1.5 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
+                                    title={t('common.delete')}
+                                  >
+                                    {deleteMutation.isPending && deleteMutation.variables === record.id ? (
+                                      <Loader2 className="w-4 h-4 animate-spin text-destructive" />
+                                    ) : (
+                                      <Trash2 className="w-4 h-4" />
+                                    )}
+                                  </button>
+                                </div>
+                              </td>
+                            )}
                           </>
                         )}
                       </tr>

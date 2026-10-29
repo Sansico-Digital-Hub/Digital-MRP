@@ -4,7 +4,7 @@
  */
 export default {
   id: {
-    subtitle: 'Kelola data hotlist untuk item. Unggah dari Excel atau isi manual.',
+    subtitle: 'Kelola data BI TOTAL (DLV + Finish Goods) untuk item. Unggah dari Excel atau isi manual.',
     uploadExcel: 'Unggah Excel',
     manualEntry: 'Isi Manual',
     prevDate: 'Sebelumnya:',
@@ -68,7 +68,7 @@ export default {
     },
   },
   en: {
-    subtitle: 'Manage hotlist data for items. Upload from Excel or add manually.',
+    subtitle: 'Manage BI TOTAL (DLV + Finish Goods) data for items. Upload from Excel or add manually.',
     uploadExcel: 'Upload Excel',
     manualEntry: 'Manual Entry',
     prevDate: 'Prev:',

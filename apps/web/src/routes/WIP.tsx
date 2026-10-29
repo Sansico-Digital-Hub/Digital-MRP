@@ -5,6 +5,7 @@ import { SearchableSelect } from '../components/SearchableSelect';
 import { Settings2, Plus, Save, Upload, Trash2, Search, Filter, Calendar, X, Folder, ArrowLeft, Lock, CalendarPlus, Loader2 } from 'lucide-react';
 import { usePeriods, useCreatePeriod, monthLabel, periodDisplayLabel, type DataModule } from '../hooks/usePeriods';
 import { PeriodSelect } from '../components/PeriodSelect';
+import { PeriodMeta } from '../components/PeriodMeta';
 import { ModuleSelect } from '../components/ModuleSelect';
 import * as XLSX from 'xlsx';
 import { useAuthStore, lockedDataModule } from '../stores/authStore';
@@ -415,17 +416,17 @@ export function WIP() {
               </p>
             </div>
           )}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
             {periods.map((p) => (
               <div
                 key={p.id}
                 onClick={() => setSelectedPeriodId(p.id)}
-                className="cursor-pointer p-5 border rounded-lg bg-card hover:bg-muted/50 hover:border-primary/50 transition-all flex items-center gap-4 group shadow-sm"
+                className="cursor-pointer p-5 border rounded-lg bg-card hover:bg-muted/50 hover:border-primary/50 transition-all flex flex-wrap items-center gap-x-4 gap-y-2 group shadow-sm"
               >
                 <div className="p-3 bg-blue-500/10 rounded-lg group-hover:bg-blue-500/20 transition-colors">
                   <Folder className="w-8 h-8 text-blue-500 fill-blue-500/20" />
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <h3 className="font-semibold text-foreground flex items-center gap-1.5">
                     <span className="truncate">{periodDisplayLabel(p, lang)}</span>
                     {p.isLocked && <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
@@ -434,6 +435,7 @@ export function WIP() {
                     {t('wip.periodCard.line', { count: p.moduleCounts[moduleType].WIP, module: moduleLabel })}
                   </p>
                 </div>
+                <PeriodMeta period={p} className="w-full" />
               </div>
             ))}
 

@@ -271,6 +271,7 @@ async function calculateCycleResult(cycleId: string, userId: string): Promise<Ca
     toleranceCm: config.materialCalc.sizeToleranceCm,
     sheetsPerRim: config.materialCalc.sheetsPerRim,
     requireSupplierMatch: config.materialCalc.requireSupplierMatch,
+    recommendation: config.materialCalc.recommendation,
   });
 
   const calculatedAt = new Date();
@@ -363,19 +364,61 @@ export default async function materialPlanningRoutes(server: FastifyInstance) {
    */
   server.get('/api/v1/material-planning/periods', { preValidation: [authenticate] }, async (_request, reply) => {
     const cycles = await prisma.planningCycle.findMany({ orderBy: { uploadMonth: 'desc' } });
+    const cycleIds = cycles.map((cycle) => cycle.id);
+
+    // Jejak upload terakhir per periode (siapa + kapan) untuk kartu folder periode.
+    const uploads = cycleIds.length
+      ? await prisma.cycleSourceUpload.findMany({
+          where: { cycleId: { in: cycleIds } },
+          orderBy: { uploadedAt: 'desc' },
+          select: {
+            cycleId: true,
+            sourceType: true,
+            fileName: true,
+            uploadedAt: true,
+            uploadedBy: true,
+          },
+        })
+      : [];
+    const lastUploadByCycle = new Map<string, (typeof uploads)[number]>();
+    for (const upload of uploads) {
+      if (!lastUploadByCycle.has(upload.cycleId)) lastUploadByCycle.set(upload.cycleId, upload);
+    }
+
+    const userIds = [
+      ...new Set([
+        ...uploads.map((upload) => upload.uploadedBy),
+        ...cycles.map((cycle) => cycle.lastEditedBy).filter((id): id is string => Boolean(id)),
+      ]),
+    ];
+    const users = userIds.length
+      ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true } })
+      : [];
+    const nameById = new Map(users.map((user) => [user.id, user.name]));
+
     const data = await Promise.all(
-      cycles.map(async (c) => ({
-        id: c.id,
-        uploadMonth: c.uploadMonth,
-        label: c.label,
-        isLocked: c.isLocked,
-        mrpStartDate: c.mrpStartDate,
-        mrpEndDate: c.mrpEndDate,
-        // counts = sumber modul MATERIAL (dipakai Material Calculation)
-        counts: await countPeriodRows(c.id),
-        // counts terpisah Production vs Material (dipakai halaman Master Data)
-        moduleCounts: await countModuleRows(c.id),
-      })),
+      cycles.map(async (c) => {
+        const lastUpload = lastUploadByCycle.get(c.id) ?? null;
+        return {
+          id: c.id,
+          uploadMonth: c.uploadMonth,
+          label: c.label,
+          isLocked: c.isLocked,
+          mrpStartDate: c.mrpStartDate,
+          mrpEndDate: c.mrpEndDate,
+          // counts = sumber modul MATERIAL (dipakai Material Calculation)
+          counts: await countPeriodRows(c.id),
+          // counts terpisah Production vs Material (dipakai halaman Master Data)
+          moduleCounts: await countModuleRows(c.id),
+          // Jejak upload terakhir (dari cycle_source_uploads) & edit manual terakhir.
+          lastUploadAt: lastUpload?.uploadedAt ?? null,
+          lastUploadByName: lastUpload ? (nameById.get(lastUpload.uploadedBy) ?? null) : null,
+          lastUploadSource: lastUpload?.sourceType ?? null,
+          lastUploadFileName: lastUpload?.fileName ?? null,
+          lastEditedAt: c.lastEditedAt ?? null,
+          lastEditedByName: c.lastEditedBy ? (nameById.get(c.lastEditedBy) ?? null) : null,
+        };
+      }),
     );
     return reply.send({ data });
   });

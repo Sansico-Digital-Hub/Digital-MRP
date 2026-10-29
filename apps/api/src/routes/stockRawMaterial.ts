@@ -4,7 +4,10 @@ import { config } from '../config';
 import { authenticate } from '../middleware/auth';
 import { resolveUploadPeriod, recordPeriodChange, touchPeriod } from '../lib/periodScope';
 import { normalizeHeaderName, matchesMtl } from '../lib/excelRef';
-import { canonicalSupplier } from '../lib/supplierAlias';
+import { canonicalSupplier, supplierOk } from '../lib/supplierAlias';
+import { matchSize, parseDims, parseGsm } from '../lib/materialSizeMatch';
+import { sizeRatio, wasteOfUsage } from '../lib/materialSizeRecommendation';
+import { buildStockUsage } from '../lib/stockUsage';
 import * as xlsx from 'xlsx';
 
 export default async function stockRawMaterialRoutes(server: FastifyInstance) {
@@ -121,6 +124,68 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
     return reply.send({ data, sheetsPerRim: config.materialCalc.sheetsPerRim });
   });
 
+  /**
+   * Monitoring PEMAKAIAN stok per ukuran: berapa yang sudah dipakai hasil
+   * perhitungan dan berapa yang belum.
+   *
+   * Tidak ada tabel baru — "terpakai" diambil dari snapshot hasil perhitungan
+   * aktif (`CycleResult.isCurrent`), "stok" dari Master Data periode ini.
+   * Karena itu angkanya WAJIB dibaca bersama `result.isStale`: kalau stok diedit
+   * setelah perhitungan, pemakaian bisa melebihi stok (`overAllocated`).
+   */
+  server.get('/api/v1/stock-raw-material/usage', { preValidation: [authenticate] }, async (request, reply) => {
+    const { periodId } = request.query as { periodId?: string };
+    if (!periodId) {
+      return reply.code(400).send({
+        error: 'Bad Request',
+        message: 'Parameter periodId wajib diisi. Pilih periode dulu.',
+      });
+    }
+
+    const [rows, result] = await Promise.all([
+      prisma.stockRawMaterial.findMany({
+        where: { periodId },
+        select: { itemDesc: true, supplier: true, qty: true, unit: true },
+      }),
+      prisma.cycleResult.findFirst({
+        where: { cycleId: periodId, isCurrent: true },
+        select: {
+          id: true,
+          runNumber: true,
+          calculatedAt: true,
+          dataVersionAt: true,
+          resultSnapshot: true,
+          cycle: { select: { lastDataChangeAt: true } },
+        },
+      }),
+    ]);
+
+    const usage = buildStockUsage({
+      rows,
+      resultSnapshot: result?.resultSnapshot ?? null,
+      sheetsPerRim: config.materialCalc.sheetsPerRim,
+    });
+
+    return reply.send({
+      data: {
+        periodId,
+        sheetsPerRim: config.materialCalc.sheetsPerRim,
+        result: result
+          ? {
+              id: result.id,
+              runNumber: result.runNumber,
+              calculatedAt: result.calculatedAt,
+              dataVersionAt: result.dataVersionAt,
+              // Stok/hotlist/NPOF berubah setelah perhitungan -> angka pemakaian
+              // sudah tidak mencerminkan data terbaru.
+              isStale: result.cycle.lastDataChangeAt.getTime() > result.dataVersionAt.getTime(),
+            }
+          : null,
+        ...usage,
+      },
+    });
+  });
+
   /** Detail per lot untuk satu itemDesc + supplier. */
   server.get('/api/v1/stock-raw-material/lots', { preValidation: [authenticate] }, async (request, reply) => {
     const { itemDesc, supplier, periodId } = request.query as {
@@ -158,6 +223,174 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
       total: data.reduce((sum, r) => sum + r.qty, 0),
     });
   });
+
+  /**
+   * Rekomendasi alokasi untuk SATU item stok: part number mana saja yang bisa
+   * memakai material ini, beserta estimasi waste dari pemakaian tersebut.
+   *
+   * Sumber daftar part = snapshot hasil perhitungan periode ini (tidak
+   * menghitung ulang, jadi angkanya konsisten dengan halaman Material
+   * Calculation). Read-only: tidak mengubah stok maupun hasil perhitungan.
+   */
+  server.get(
+    '/api/v1/stock-raw-material/allocation-recommendation',
+    { preValidation: [authenticate] },
+    async (request, reply) => {
+      const { periodId, itemDesc, supplier } = request.query as {
+        periodId?: string;
+        itemDesc?: string;
+        supplier?: string;
+      };
+      if (!periodId || !itemDesc) {
+        return reply.code(400).send({
+          error: 'Bad Request',
+          message: 'Parameter periodId dan itemDesc wajib diisi.',
+        });
+      }
+
+      // ── 1. Stok lot ini (semua baris dengan itemDesc + supplier sama) ──
+      const rows = (
+        await prisma.stockRawMaterial.findMany({
+          where: { periodId, itemDesc },
+          orderBy: { date: 'desc' },
+        })
+      ).filter((row) => supplier === undefined || canonicalSupplier(row.supplier) === supplier);
+
+      const SHEET_UNITS = ['sheet', 'sheets', 'sht', 'lbr', 'lembar'];
+      const RIM_UNITS = ['rim', 'ream'];
+      let totalKg = 0;
+      let totalSheet = 0;
+      for (const row of rows) {
+        const unit = String(row.unit || '').trim().toLowerCase();
+        if (SHEET_UNITS.includes(unit)) totalSheet += row.qty;
+        else if (RIM_UNITS.includes(unit)) totalSheet += row.qty * config.materialCalc.sheetsPerRim;
+        else if (unit === 't' || unit === 'ton') totalKg += row.qty * 1000;
+        else totalKg += row.qty;
+      }
+
+      const dims = parseDims(itemDesc);
+      const lotWidth = dims[0] ?? null;
+      const lotLength = dims[1] ?? null;
+      const lotGsm = parseGsm(itemDesc);
+      const lotSupplier = supplier ?? canonicalSupplier(rows[0]?.supplier);
+
+      const base = {
+        itemDesc,
+        supplier: lotSupplier,
+        lots: rows.length,
+        totalKg,
+        totalSheet,
+        lotWidth,
+        lotLength,
+        lotGsm,
+        hasResult: false,
+        calculatedAt: null as string | null,
+        candidates: [] as Array<Record<string, unknown>>,
+      };
+
+      if (rows.length === 0) return reply.send({ data: base });
+      if (lotGsm === null || lotWidth === null) {
+        return reply.send({ data: { ...base, reason: 'no-dimension' as const } });
+      }
+
+      // ── 2. Snapshot hasil perhitungan periode ini ───────────────────────
+      const result = await prisma.cycleResult.findFirst({
+        where: { cycleId: periodId, isCurrent: true },
+        select: { resultSnapshot: true, calculatedAt: true },
+      });
+      if (!result) return reply.send({ data: base });
+
+      const groups = ((result.resultSnapshot as Record<string, unknown>)?.groups ?? []) as Array<
+        Record<string, any>
+      >;
+
+      // ── 3. Cocokkan material ini ke setiap ukuran/part di hasil ────────
+      const candidates: Array<Record<string, unknown>> = [];
+      for (const group of groups) {
+        const ukuran = String(group.ukuran ?? '');
+        const gramatur = String(group.gramatur ?? '');
+        const groupSupplier = String(group.supplier ?? '');
+        const needGsm = parseGsm(gramatur);
+        const groupDims = parseDims(ukuran);
+        const needWidth = groupDims[0] ?? null;
+        const needLength = groupDims[1] ?? null;
+        if (needGsm === null || needWidth === null) continue;
+        if (!supplierOk(lotSupplier, groupSupplier, config.materialCalc.requireSupplierMatch)) continue;
+
+        const match = matchSize(
+          itemDesc,
+          needGsm,
+          needWidth,
+          config.materialCalc.sizeToleranceCm,
+          needLength,
+        );
+        if (match === null) continue;
+
+        const ratio = sizeRatio(lotWidth, lotLength, needWidth, needLength);
+        const wastePct = Math.max(0, 1 - match.multiplier / ratio);
+        const trimWidthCm = Math.max(0, lotWidth - match.multiplier * needWidth);
+
+        // Bagian lot ini yang SUDAH terpakai grup tersebut (dari snapshot).
+        const alreadyByGroup = new Map<string, number>();
+        for (const d of ((group.weeklyMatrix?.summary?.stockDetails ?? []) as Array<Record<string, any>>)) {
+          const key = String(d.poolRef ?? `${d.desc}||${canonicalSupplier(d.supplier)}`);
+          alreadyByGroup.set(key, Number(d.allocatedKg) || 0);
+        }
+        const alreadyAllocatedKg = alreadyByGroup.get(`${itemDesc}||${lotSupplier}`) ?? 0;
+
+        for (const detail of (group.details ?? []) as Array<Record<string, any>>) {
+          const fm = Number(detail.fm) || 0;
+          if (fm <= 0) continue;
+          const needSheet = Math.max(0, Number(detail.sheetsNet2) || 0);
+          const needKg = needSheet * fm;
+          // Kapasitas lot ini dinyatakan dalam kg produk untuk part tersebut:
+          // 1 lembar lot menyediakan `ratio / multiplier` lembar kebutuhan.
+          const lotCapacityKg = totalKg + totalSheet * ((fm * ratio) / match.multiplier);
+          const allocatableKg = Math.max(0, Math.min(lotCapacityKg, needKg));
+          const waste = wasteOfUsage(allocatableKg, ratio, match.multiplier);
+
+          candidates.push({
+            partNumber: detail.partNumber,
+            productName: detail.productName,
+            ukuran,
+            gramatur,
+            groupSupplier,
+            materialType: detail.materialType ?? null,
+            demandPcs: Number(detail.demandPcs) || 0,
+            needSheet,
+            needKg,
+            shortageSheet: detail.shortageSheet ?? null,
+            isSufficient: Boolean(detail.isSufficient),
+            multiplier: match.multiplier,
+            trimWidthCm,
+            trimLengthCm:
+              lotLength !== null && needLength !== null ? Math.max(0, lotLength - needLength) : 0,
+            wastePct,
+            lotCapacityKg,
+            allocatableKg,
+            wasteKg: waste.wasteKg,
+            alreadyAllocatedKg,
+          });
+        }
+      }
+
+      candidates.sort(
+        (a, b) =>
+          Number(a.wastePct) - Number(b.wastePct) ||
+          Number(b.allocatableKg) - Number(a.allocatableKg) ||
+          String(a.partNumber).localeCompare(String(b.partNumber)),
+      );
+
+      return reply.send({
+        data: {
+          ...base,
+          hasResult: true,
+          calculatedAt: result.calculatedAt.toISOString(),
+          candidates,
+        },
+      });
+    },
+  );
 
   // Upload Excel
   server.post('/api/v1/stock-raw-material/upload', { preValidation: [authenticate] }, async (request, reply) => {
@@ -550,7 +783,7 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
       },
     });
 
-    await touchPeriod(resolved.periodId);
+    await touchPeriod(resolved.periodId, request.user!.id);
     return reply.code(201).send({ data: result });
   });
 
@@ -587,7 +820,7 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
       },
     });
 
-    await touchPeriod(existing.periodId);
+    await touchPeriod(existing.periodId, request.user!.id);
     return reply.send({ data: updated });
   });
 
@@ -602,7 +835,7 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
 
     await prisma.stockRawMaterial.delete({ where: { id } });
 
-    await touchPeriod(existing.periodId);
+    await touchPeriod(existing.periodId, request.user!.id);
     return reply.send({ message: 'Record deleted successfully' });
   });
 
@@ -623,7 +856,7 @@ export default async function stockRawMaterialRoutes(server: FastifyInstance) {
         where: { id: { in: ids } },
       });
 
-      for (const pid of [...new Set(affected.map((r) => r.periodId))]) await touchPeriod(pid);
+      for (const pid of [...new Set(affected.map((r) => r.periodId))]) await touchPeriod(pid, request.user!.id);
 
       return reply.send({ message: `Successfully deleted ${result.count} records.`, count: result.count });
     } catch (error) {

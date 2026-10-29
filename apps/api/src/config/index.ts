@@ -74,6 +74,21 @@ export const config = {
     //   milik MEGA ikut dipakai di ukuran `120 x 85.5 CM` milik HANCHANG.
     // false = kembali ke perilaku lama (hanya gramatur + ukuran yang menentukan).
     requireSupplierMatch: (process.env.MATERIAL_REQUIRE_SUPPLIER || 'true').toLowerCase() === 'true',
+    // Fitur INFORMASI "Rekomendasi Ukuran Material & Waste". Tidak mengubah
+    // angka perhitungan (alokasi, shortage, Stock As Of, End Ind).
+    recommendation: {
+      // Jumlah alternatif ukuran yang dikirim ke UI per grup.
+      maxOptions: parseInt(process.env.MATERIAL_REC_MAX_OPTIONS || '8', 10),
+      // Kelipatan ukuran maksimum yang diuji (mis. 180 cm untuk kebutuhan 59 cm = 3).
+      maxMultiplier: parseInt(process.env.MATERIAL_REC_MAX_MULTIPLIER || '6', 10),
+      // Sertakan ukuran dari NPOF yang belum ada di stok/PO.
+      includeNpof: (process.env.MATERIAL_REC_INCLUDE_NPOF || 'true').toLowerCase() === 'true',
+      // Ukuran standar (cm) yang selalu dipertimbangkan, dipisah koma.
+      standardSizes: (process.env.MATERIAL_REC_STANDARD_SIZES || '180')
+        .split(',')
+        .map((v) => parseFloat(v.trim()))
+        .filter((v) => Number.isFinite(v) && v > 0),
+    },
   },
 };
 

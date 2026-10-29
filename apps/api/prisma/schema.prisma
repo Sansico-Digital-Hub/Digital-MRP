@@ -161,6 +161,79 @@ model WeeklySchedule {
 }
 
 // ============================================
+// MRP UPLOAD HISTORY (versioning mingguan)
+// ============================================
+// Setiap upload Excel "Save Overwrite" menyimpan SNAPSHOT penuh, bukan menimpa
+// versi sebelumnya. `weekly_schedules` tetap menjadi data AKTIF (dibaca modul
+// lain), sedangkan tabel di bawah menyimpan riwayat untuk perbandingan.
+//
+// Aturan:
+//  - Nomor versi berurutan per (periodId, moduleType), mulai dari 1.
+//  - Tepat SATU versi `isCurrent` per (periodId, moduleType). Dijaga kolom
+//    `currentKey` (unique) karena MySQL tidak punya partial unique index:
+//    nilainya "<periodId>:<moduleType>" hanya untuk versi aktif, NULL untuk yang lain.
+//  - Snapshot TIDAK ikut berubah saat qty diedit manual dari tabel data aktif.
+
+enum MrpVersionSource {
+  UPLOAD // upload Excel "Save Overwrite"
+  BACKFILL // snapshot data lama saat fitur riwayat diperkenalkan
+}
+
+model MrpVersion {
+  id            String           @id @default(cuid())
+  periodId      String
+  moduleType    DataModule
+  versionNumber Int
+  isCurrent     Boolean          @default(false)
+  currentKey    String?          @unique
+  source        MrpVersionSource @default(UPLOAD)
+
+  fileName       String?
+  uploadedAt     DateTime @default(now())
+  uploadedBy     String? // NULL untuk backfill sistem; sengaja tanpa relasi agar riwayat tetap ada meski user dihapus
+  uploadedByName String?
+
+  itemCount     Int       @default(0) // jumlah part unik
+  rowCount      Int       @default(0) // jumlah baris part x minggu
+  totalQty      Float     @default(0)
+  weekStartDate DateTime? @db.Date // tanggal minggu pertama (W1)
+  weekCount     Int       @default(26)
+
+  // Kunci idempotensi dari klien: double-click / retry tidak membuat versi ganda.
+  clientRequestId String?  @unique
+  notes           String?  @db.Text
+  createdAt       DateTime @default(now())
+
+  period PlanningCycle   @relation(fields: [periodId], references: [id], onDelete: Cascade)
+  rows   MrpVersionRow[]
+
+  @@unique([periodId, moduleType, versionNumber])
+  @@index([periodId, moduleType, isCurrent])
+  @@index([uploadedAt])
+  @@map("mrp_versions")
+}
+
+model MrpVersionRow {
+  id            String   @id @default(cuid())
+  versionId     String
+  // Disimpan sebagai teks (bukan relasi Item) supaya riwayat tidak hilang saat
+  // master item berubah nama atau dihapus.
+  itemId        String?
+  partNumber    String
+  description   String?
+  weekNumber    Int
+  weekStartDate DateTime @db.Date
+  weekEndDate   DateTime @db.Date
+  quantity      Float    @default(0)
+
+  version MrpVersion @relation(fields: [versionId], references: [id], onDelete: Cascade)
+
+  @@index([versionId, partNumber])
+  @@index([versionId, weekStartDate])
+  @@map("mrp_version_rows")
+}
+
+// ============================================
 // STOCK & INVENTORY
 // ============================================
 
@@ -483,6 +556,14 @@ model PlanningCycle {
   firstUploadedAt    DateTime  @default(now())
   lastUploadedAt     DateTime  @default(now())
   lastDataChangeAt   DateTime  @default(now())
+  // Jejak EDIT MANUAL terakhir (ubah/hapus baris setelah upload). Upload sendiri
+  // dicatat lengkap di `cycle_source_uploads` (waktu + user + file).
+  lastEditedAt       DateTime?
+  lastEditedBy       String?
+  // Jejak perubahan DATA AKTIF terakhir oleh siapa & dari mana (UPLOAD | EDIT |
+  // ROLLBACK). Dipakai strip info di tab Data Aktif.
+  lastDataChangeBy   String?
+  lastDataChangeKind String?
   calculatedAt       DateTime?
   calculatedBy       String?
   calculatedRunCount Int       @default(0)
@@ -508,10 +589,11 @@ model PlanningCycle {
   pos             OutstandingPO[]
   wips            WIP[]
 
-  uploads   CycleSourceUpload[]
-  results   CycleResult[]
-  auditLogs CycleAuditLog[]
-  exclusions MaterialCalcExclusion[]
+  uploads     CycleSourceUpload[]
+  mrpVersions MrpVersion[]
+  results     CycleResult[]
+  auditLogs   CycleAuditLog[]
+  exclusions  MaterialCalcExclusion[]
   // Catatan: TIDAK ada relasi ke NPOF — dipakai bersama semua periode.
 
   @@unique([uploadMonth])

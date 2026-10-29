@@ -14,10 +14,12 @@ import {
 import { FileSpreadsheet, Plus, Upload, Loader2, Search, Pencil, Trash2, X, Check, Save, Folder, ArrowLeft, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Lock, CalendarPlus, AlertTriangle } from 'lucide-react';
 import { usePeriods, useCreatePeriod, monthLabel, periodDisplayLabel } from '../hooks/usePeriods';
 import { PeriodSelect } from '../components/PeriodSelect';
+import { PeriodMeta } from '../components/PeriodMeta';
 import { RefBSummary, RefBValue, matchesMtl } from '../components/RefB';
 import { format } from 'date-fns';
 import { useTranslation, localeCode, dateLocale } from '../i18n';
 import type { Lang } from '../i18n';
+import { useAuthStore } from '../stores/authStore';
 
 /** Satu baris Outstanding PO sebelum disimpan (hasil parse Excel / edit di preview). */
 type OutstandingPORow = Omit<OutstandingPOData, 'id' | 'periodId' | 'createdAt' | 'updatedAt'>;
@@ -192,6 +194,10 @@ function UnitTotals({
 
 export function OutstandingPO() {
   const { t, lang } = useTranslation();
+  // Master Data "Outstanding PO" hanya boleh diubah oleh Admin & Material Planner;
+  // Production Planner / User view-only.
+  const canEditDataModule = useAuthStore((state) => state.canEditDataModule);
+  const canManageData = canEditDataModule('MATERIAL');
   // Periode upload = keranjang data. WAJIB dipilih sebelum upload/isi manual.
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
   // Periode tujuan untuk Import / Add Manual. Ikut periode yang sedang dibuka,
@@ -539,6 +545,9 @@ export function OutstandingPO() {
   const totalItems = groupedByItem.length;
   const totalPos = useMemo(() => uniquePoCount(filteredRecords), [filteredRecords]);
 
+  /** Jumlah kolom tabel: 11 kolom lengkap, 10 kalau kolom centang disembunyikan. */
+  const tableColCount = canManageData ? 11 : 10;
+
   const toggleExpand = (itemDesc: string) => {
     setExpandedItemDescs(prev => {
       const next = new Set(prev);
@@ -600,29 +609,31 @@ export function OutstandingPO() {
           </p>
         </div>
         
-        <div className="flex gap-2">
-          <input type="file" ref={fileInputRef} className="hidden" accept=".xlsx, .xls, .xlsm" onChange={handleFileUpload} />
-          <button
-            onClick={() => fileInputRef.current?.click()}
-            disabled={uploadMutation.isPending || previewData.length > 0}
-            className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground hover:bg-secondary/80 rounded-md font-medium text-sm transition-colors"
-          >
-            {uploadMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
-            {t('outstandingPo.importExcel')}
-          </button>
-          
-          <button
-            onClick={() => setIsManualOpen(!isManualOpen)}
-            disabled={previewData.length > 0}
-            className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md font-medium text-sm transition-colors"
-          >
-            <Plus className="w-4 h-4" />
-            {t('outstandingPo.addManual')}
-          </button>
-        </div>
+        {canManageData && (
+          <div className="flex gap-2">
+            <input type="file" ref={fileInputRef} className="hidden" accept=".xlsx, .xls, .xlsm" onChange={handleFileUpload} />
+            <button
+              onClick={() => fileInputRef.current?.click()}
+              disabled={uploadMutation.isPending || previewData.length > 0}
+              className="flex items-center gap-2 px-4 py-2 bg-secondary text-secondary-foreground hover:bg-secondary/80 rounded-md font-medium text-sm transition-colors"
+            >
+              {uploadMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Upload className="w-4 h-4" />}
+              {t('outstandingPo.importExcel')}
+            </button>
+
+            <button
+              onClick={() => setIsManualOpen(!isManualOpen)}
+              disabled={previewData.length > 0}
+              className="flex items-center gap-2 px-4 py-2 bg-primary text-primary-foreground hover:bg-primary/90 rounded-md font-medium text-sm transition-colors"
+            >
+              <Plus className="w-4 h-4" />
+              {t('outstandingPo.addManual')}
+            </button>
+          </div>
+        )}
       </div>
 
-      {previewData.length > 0 ? (
+      {canManageData && previewData.length > 0 ? (
         <div className="bg-card border border-primary/20 rounded-lg shadow-md overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
           <div className="p-5 border-b bg-primary/5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
@@ -858,7 +869,7 @@ export function OutstandingPO() {
         </div>
       ) : (
         <>
-          {isManualOpen && (
+          {canManageData && isManualOpen && (
             <div className="bg-card border rounded-lg p-5 shadow-sm animate-in slide-in-from-top-2">
               <h2 className="text-sm font-semibold mb-4">{t('outstandingPo.addManualTitle')}</h2>
               <form onSubmit={handleManualSubmit} className="grid grid-cols-1 md:grid-cols-12 gap-4 items-end">
@@ -938,17 +949,17 @@ export function OutstandingPO() {
                   </p>
                 </div>
               )}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                 {periods.map((p) => (
                   <div
                     key={p.id}
                     onClick={() => setSelectedPeriodId(p.id)}
-                    className="cursor-pointer p-5 border rounded-lg bg-card hover:bg-muted/50 hover:border-primary/50 transition-all flex items-center gap-4 group shadow-sm"
+                    className="cursor-pointer p-5 border rounded-lg bg-card hover:bg-muted/50 hover:border-primary/50 transition-all flex flex-wrap items-center gap-x-4 gap-y-2 group shadow-sm"
                   >
                     <div className="p-3 bg-blue-500/10 rounded-lg group-hover:bg-blue-500/20 transition-colors">
                       <Folder className="w-8 h-8 text-blue-500 fill-blue-500/20" />
                     </div>
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <h3 className="font-semibold text-foreground flex items-center gap-1.5">
                         <span className="truncate">{periodDisplayLabel(p, lang)}</span>
                         {p.isLocked && <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
@@ -957,28 +968,31 @@ export function OutstandingPO() {
                         {t('outstandingPo.periodCounts', { po: p.counts.OUTSTANDING_PO, mrp: p.counts.MRP })}
                       </p>
                     </div>
+                    <PeriodMeta period={p} className="w-full" />
                   </div>
                 ))}
 
-                <div className="p-5 border-2 border-dashed rounded-lg bg-card flex flex-col gap-3 justify-center">
-                  <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
-                    <CalendarPlus className="w-4 h-4" /> {t('outstandingPo.createNewPeriod')}
+                {canManageData && (
+                  <div className="p-5 border-2 border-dashed rounded-lg bg-card flex flex-col gap-3 justify-center">
+                    <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
+                      <CalendarPlus className="w-4 h-4" /> {t('outstandingPo.createNewPeriod')}
+                    </div>
+                    <input
+                      type="month"
+                      value={newPeriodMonth}
+                      onChange={(e) => setNewPeriodMonth(e.target.value)}
+                      className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary"
+                    />
+                    <button
+                      onClick={handleCreatePeriod}
+                      disabled={!newPeriodMonth || createPeriod.isPending}
+                      className="w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center gap-2"
+                    >
+                      {createPeriod.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
+                      {t('components.createPeriod', { label: newPeriodMonth ? monthLabel(newPeriodMonth, lang) : t('components.periodLabel') })}
+                    </button>
                   </div>
-                  <input
-                    type="month"
-                    value={newPeriodMonth}
-                    onChange={(e) => setNewPeriodMonth(e.target.value)}
-                    className="w-full px-3 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary"
-                  />
-                  <button
-                    onClick={handleCreatePeriod}
-                    disabled={!newPeriodMonth || createPeriod.isPending}
-                    className="w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50 px-3 py-2 rounded-md text-sm font-medium flex items-center justify-center gap-2"
-                  >
-                    {createPeriod.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                    {t('components.createPeriod', { label: newPeriodMonth ? monthLabel(newPeriodMonth, lang) : t('components.periodLabel') })}
-                  </button>
-                </div>
+                )}
               </div>
             </div>
           ) : (
@@ -1007,7 +1021,7 @@ export function OutstandingPO() {
                 </div>
               </div>
               <div className="flex items-center gap-3">
-                {selectedIds.length > 0 && (
+                {canManageData && selectedIds.length > 0 && (
                   <button onClick={handleBulkDelete} disabled={bulkDeleteMutation.isPending} className="flex items-center gap-2 px-3 py-1.5 bg-destructive text-destructive-foreground hover:bg-destructive/90 rounded-md font-medium text-sm animate-in fade-in">
                     {bulkDeleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />} {t('outstandingPo.deleteCount', { count: selectedIds.length })}
                   </button>
@@ -1024,9 +1038,11 @@ export function OutstandingPO() {
               <table className="w-full text-sm text-left">
                 <thead className="text-xs text-muted-foreground uppercase bg-secondary/50">
                   <tr>
-                    <th className="px-4 py-4 w-12 text-center">
-                      <input type="checkbox" className="rounded border-gray-300 w-4 h-4" checked={filteredRecords.length > 0 && selectedIds.length === filteredRecords.length} onChange={handleSelectAll} />
-                    </th>
+                    {canManageData && (
+                      <th className="px-4 py-4 w-12 text-center">
+                        <input type="checkbox" className="rounded border-gray-300 w-4 h-4" checked={filteredRecords.length > 0 && selectedIds.length === filteredRecords.length} onChange={handleSelectAll} />
+                      </th>
+                    )}
                     <th className="px-6 py-4 font-semibold">{t('outstandingPo.planDate')}</th>
                     <th className="px-6 py-4 font-semibold">{t('outstandingPo.poNumber')}</th>
                     <th className="px-6 py-4 font-semibold">{t('outstandingPo.supplier')}</th>
@@ -1042,14 +1058,14 @@ export function OutstandingPO() {
                 <tbody className="divide-y">
                   {isLoading ? (
                     <tr>
-                      <td colSpan={11} className="px-6 py-12 text-center text-muted-foreground">
+                      <td colSpan={tableColCount} className="px-6 py-12 text-center text-muted-foreground">
                         <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" />
                         <p className="mt-2 text-sm font-medium">{t('common.loading')}</p>
                       </td>
                     </tr>
                   ) : groupedByItem.length === 0 ? (
                     <tr>
-                      <td colSpan={11} className="px-6 py-12 text-center text-muted-foreground">
+                      <td colSpan={tableColCount} className="px-6 py-12 text-center text-muted-foreground">
                         <FileSpreadsheet className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
                         <p className="text-base font-semibold">{t('outstandingPo.noData')}</p>
                       </td>
@@ -1065,17 +1081,19 @@ export function OutstandingPO() {
                         <Fragment key={group.itemDesc}>
                           {/* Baris grup (level 1): satu ukuran / ITEM DESC */}
                           <tr className="hover:bg-muted/40 transition-colors bg-card font-medium border-b">
-                            <td className="px-4 py-3.5 text-center">
-                              <input
-                                type="checkbox"
-                                className="rounded border-gray-300 w-4 h-4"
-                                checked={isGroupAllSelected}
-                                ref={(el) => {
-                                  if (el) el.indeterminate = isGroupSomeSelected;
-                                }}
-                                onChange={() => handleToggleGroupSelect(group.items)}
-                              />
-                            </td>
+                            {canManageData && (
+                              <td className="px-4 py-3.5 text-center">
+                                <input
+                                  type="checkbox"
+                                  className="rounded border-gray-300 w-4 h-4"
+                                  checked={isGroupAllSelected}
+                                  ref={(el) => {
+                                    if (el) el.indeterminate = isGroupSomeSelected;
+                                  }}
+                                  onChange={() => handleToggleGroupSelect(group.items)}
+                                />
+                              </td>
+                            )}
                             <td className="px-6 py-3.5 text-muted-foreground text-xs font-medium whitespace-nowrap">
                               {group.planDateLabels.length === 1
                                 ? group.planDateLabels[0]
@@ -1128,14 +1146,16 @@ export function OutstandingPO() {
                                 key={record.id}
                                 className="bg-muted/20 hover:bg-muted/35 transition-colors border-l-4 border-l-primary/60"
                               >
-                                <td className="px-4 py-2.5 text-center">
-                                  <input
-                                    type="checkbox"
-                                    className="rounded border-gray-300 w-4 h-4"
-                                    checked={selectedIds.includes(record.id)}
-                                    onChange={(e) => handleSelectOne(e, record.id)}
-                                  />
-                                </td>
+                                {canManageData && (
+                                  <td className="px-4 py-2.5 text-center">
+                                    <input
+                                      type="checkbox"
+                                      className="rounded border-gray-300 w-4 h-4"
+                                      checked={selectedIds.includes(record.id)}
+                                      onChange={(e) => handleSelectOne(e, record.id)}
+                                    />
+                                  </td>
+                                )}
                                 <td className="px-6 py-2.5 font-medium whitespace-nowrap text-xs text-foreground">
                                   {safeFormatDate(record.planReceivedDate, lang)}
                                 </td>
@@ -1264,27 +1284,29 @@ export function OutstandingPO() {
                                       </span>
                                     </td>
                                     <td className="px-6 py-2.5 text-right">
-                                      <div className="flex items-center justify-end gap-1">
-                                        <button
-                                          onClick={() => handleEditClick(record)}
-                                          className="p-1 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition-colors"
-                                          title={t('outstandingPo.editPo')}
-                                        >
-                                          <Pencil className="w-3.5 h-3.5" />
-                                        </button>
-                                        <button
-                                          onClick={() => handleDelete(record.id)}
-                                          disabled={deleteMutation.isPending && deleteMutation.variables === record.id}
-                                          className="p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
-                                          title={t('outstandingPo.deletePo')}
-                                        >
-                                          {deleteMutation.isPending && deleteMutation.variables === record.id ? (
-                                            <Loader2 className="w-3.5 h-3.5 animate-spin text-destructive" />
-                                          ) : (
-                                            <Trash2 className="w-3.5 h-3.5" />
-                                          )}
-                                        </button>
-                                      </div>
+                                      {canManageData && (
+                                        <div className="flex items-center justify-end gap-1">
+                                          <button
+                                            onClick={() => handleEditClick(record)}
+                                            className="p-1 text-muted-foreground hover:text-primary hover:bg-primary/10 rounded transition-colors"
+                                            title={t('outstandingPo.editPo')}
+                                          >
+                                            <Pencil className="w-3.5 h-3.5" />
+                                          </button>
+                                          <button
+                                            onClick={() => handleDelete(record.id)}
+                                            disabled={deleteMutation.isPending && deleteMutation.variables === record.id}
+                                            className="p-1 text-muted-foreground hover:text-destructive hover:bg-destructive/10 rounded transition-colors"
+                                            title={t('outstandingPo.deletePo')}
+                                          >
+                                            {deleteMutation.isPending && deleteMutation.variables === record.id ? (
+                                              <Loader2 className="w-3.5 h-3.5 animate-spin text-destructive" />
+                                            ) : (
+                                              <Trash2 className="w-3.5 h-3.5" />
+                                            )}
+                                          </button>
+                                        </div>
+                                      )}
                                     </td>
                                   </>
                                 )}

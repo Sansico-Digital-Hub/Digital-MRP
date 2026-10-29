@@ -2,13 +2,19 @@ import React, { useState, useMemo } from 'react';
 import { useWeeklyScheduleSummary, useBulkUpsertWeeklySchedule, useUpdateWeeklySchedule, useDeleteWeeklySchedule, useBulkDeleteWeeklySchedule } from '../hooks/useWeeklySchedule';
 import { usePeriods, useCreatePeriod, useUpdatePeriod, useDeletePeriod, monthLabel, MODULE_LABELS, type DataModule } from '../hooks/usePeriods';
 import { PeriodSelect } from '../components/PeriodSelect';
+import { PeriodMeta } from '../components/PeriodMeta';
 import { ModuleSelect } from '../components/ModuleSelect';
 import { useItems, useCreateItem } from '../hooks/useItems';
 import { SearchableSelect } from '../components/SearchableSelect';
-import { Upload, Search, Save, Plus, CalendarRange, Trash2, ChevronLeft, ChevronRight, Calendar, Edit2, Folder, ArrowLeft, Lock, CalendarPlus, Loader2 } from 'lucide-react';
-import * as XLSX from 'xlsx';
+import { Upload, Search, Save, Plus, CalendarRange, Trash2, ChevronLeft, ChevronRight, Calendar, Edit2, Folder, ArrowLeft, Lock, CalendarPlus, Loader2, GitCompare, History, Info, FileSpreadsheet } from 'lucide-react';
 import { useAuthStore, lockedDataModule } from '../stores/authStore';
-import { parse26WeekExcel, localDateFromISO, type ImportRow } from '../lib/mrpWeekImport';
+import { localDateFromISO, type ImportRow } from '../lib/mrpWeekImport';
+import { parseMrpExcelFile } from '../lib/mrpParseWorker';
+import { usePreviewMrpVersion, useSaveMrpVersion, type MrpUploadRow } from '../hooks/useMrpVersions';
+import { ChangeSummaryCards } from '../components/mrp/ChangeSummaryCards';
+import { VersionCompareTable } from '../components/mrp/VersionCompareTable';
+import { UploadHistoryPanel } from '../components/mrp/UploadHistoryPanel';
+import { dateTimeLabel } from '../lib/mrpCompare';
 
 // Compute ISO week number / ISO year for a given date.
 // Used to build a unique (year, weekNumber) pair when manually adding demand.
@@ -29,8 +35,22 @@ function getNextSaturdayISO(): string {
   return d.toISOString().split('T')[0];
 }
 
+/** Bentuk payload yang dipakai API riwayat MRP (snapshot per upload). */
+function toUploadRows(rows: ImportRow[]): MrpUploadRow[] {
+  return rows.map((row) => ({
+    partNumber: row.itemCode,
+    description: row.description,
+    weeks: row.weeks.map((week) => ({
+      weekNumber: week.weekNumber,
+      weekStartDate: week.weekStartDate,
+      quantity: week.quantity,
+    })),
+  }));
+}
+
 // ─── Main Component ──────────────────────────────────────────────────────────
 const WEEKS_PER_PAGE = 13; // Show 13 weeks at a time (half of 26)
+const PREVIEW_ROWS_PER_PAGE = 20; // Pratinjau import: batasi baris yang dirender
 
 export function WeeklyDemand() {
   const { user, canEditDataModule } = useAuthStore();
@@ -45,6 +65,18 @@ export function WeeklyDemand() {
   const [showForm, setShowForm] = useState(false);
   const [importRows, setImportRows] = useState<ImportRow[]>([]);
   const [importSearch, setImportSearch] = useState('');
+  // Nama file & kunci idempotensi disimpan per sesi upload: retry setelah
+  // jaringan gagal tidak boleh membuat versi ganda.
+  const [importFileName, setImportFileName] = useState('');
+  const clientRequestIdRef = React.useRef('');
+  const [isSavingVersion, setIsSavingVersion] = useState(false);
+  // Parsing Excel berjalan di Web Worker; state ini menampilkan indikator loading.
+  const [isParsingFile, setIsParsingFile] = useState(false);
+  // Pratinjau hanya merender sebagian baris — merender ribuan baris x 35 minggu
+  // sekaligus membuat browser freeze ("Page Unresponsive").
+  const [previewPage, setPreviewPage] = useState(0);
+  // Tab di dalam periode terpilih: data aktif vs riwayat upload.
+  const [periodTab, setPeriodTab] = useState<'data' | 'history'>('data');
   // Periode upload = keranjang data. WAJIB dipilih sebelum upload/isi manual.
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
   // Modul pemilik data MRP. Data Production Planning dan Material Planning
@@ -117,10 +149,12 @@ export function WeeklyDemand() {
     quantity: 0,
   });
 
-  const { data: summaryData, isLoading } = useWeeklyScheduleSummary(selectedPeriodId, moduleType);
+  const { data: summaryData, isLoading, isFetching: isSummaryFetching } = useWeeklyScheduleSummary(selectedPeriodId, moduleType);
   const { data: itemsData } = useItems();
   const createItem = useCreateItem();
   const bulkUpsert = useBulkUpsertWeeklySchedule();
+  const previewVersion = usePreviewMrpVersion();
+  const saveVersion = useSaveMrpVersion();
   const updateWeekly = useUpdateWeeklySchedule();
   const deleteWeekly = useDeleteWeeklySchedule();
   const bulkDelete = useBulkDeleteWeeklySchedule();
@@ -314,67 +348,95 @@ export function WeeklyDemand() {
   const allFilteredSelected = paginatedData.length > 0 && paginatedData.every((r: any) => selectedItemIds.includes(r.itemId));
 
   // ── Import handlers ──
-  const handleFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
-    if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (evt) => {
-      try {
-        const wb = XLSX.read(evt.target?.result, { type: 'binary' });
-        const fallbackYear = Number(targetPeriod?.uploadMonth.slice(0, 4)) || currentYear;
-        let parsed: { rows: ImportRow[]; startDate: string } = { rows: [], startDate: '' };
-        for (const sheetName of wb.SheetNames) {
-          parsed = parse26WeekExcel(wb.Sheets[sheetName], fallbackYear);
-          if (parsed.rows.length > 0) break;
-        }
-        if (parsed.rows.length === 0) {
-          alert('Tidak dapat memparse file Excel. Pastikan format sesuai (kolom PN, Description, Week 1-26).');
-          return;
-        }
-        setImportRows(parsed.rows);
-      } catch {
-        alert('Gagal membaca file Excel. Pastikan tanggal setiap kolom minggu terbaca.');
-      }
-    };
-    reader.readAsBinaryString(file);
     e.target.value = '';
+    if (!file) return;
+
+    // Kosongkan pratinjau lama supaya tabel besar sebelumnya tidak ikut dirender.
+    setImportRows([]);
+    setPreviewPage(0);
+    setIsParsingFile(true);
+
+    try {
+      const fallbackYear = Number(targetPeriod?.uploadMonth.slice(0, 4)) || currentYear;
+      const parsed = await parseMrpExcelFile(file, fallbackYear);
+      if (parsed.rows.length === 0) {
+        alert('Tidak dapat memparse file Excel. Pastikan format sesuai (kolom PN, Description, Week 1-26).');
+        return;
+      }
+      setImportRows(parsed.rows);
+      setImportFileName(file.name);
+      clientRequestIdRef.current =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `mrp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    } catch (error: any) {
+      alert(error?.message || 'Gagal membaca file Excel. Pastikan tanggal setiap kolom minggu terbaca.');
+    } finally {
+      setIsParsingFile(false);
+    }
   };
 
-  const handleBulkSave = async (saveMode: 'overwrite' | 'add') => {
-    if (importRows.length === 0) return;
-    const records: any[] = [];
-    for (const row of importRows) {
-      for (const w of row.weeks) {
-        records.push({
-          year: Number(w.weekStartDate.slice(0, 4)),
-          weekNumber: w.weekNumber,
-          weekStartDate: w.weekStartDate || undefined,
-          weekEndDate: w.weekStartDate
-            ? new Date(new Date(w.weekStartDate).getTime() + 6 * 86400000).toISOString().split('T')[0]
-            : undefined,
-          itemCode: row.itemCode,
-          description: row.description,
-          quantity: w.quantity,
-        });
-      }
-    }
+  // Pratinjau perubahan dihitung ulang setiap file / periode / modul berubah,
+  // supaya ringkasan "part baru / dihapus / berubah" selalu mengacu ke versi
+  // terakhir pada periode + modul yang dipilih.
+  React.useEffect(() => {
+    if (!showImport || !targetPeriodId || importRows.length === 0) return;
+    previewVersion.mutate({ periodId: targetPeriodId, moduleType, rows: toUploadRows(importRows) });
+    // `previewVersion.mutate` stabil; sengaja tidak dimasukkan ke daftar dependensi.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showImport, targetPeriodId, moduleType, importRows]);
+
+  /**
+   * Simpan upload sebagai VERSI BARU (snapshot) lalu jadikan versi aktif.
+   * Versi sebelumnya tidak dihapus — bisa dibandingkan di tab History & Compare.
+   */
+  const handleVersionSave = async () => {
+    // Cegah double-click: satu klik hanya boleh menghasilkan satu versi.
+    if (isSavingVersion || saveVersion.isPending) return;
     if (!targetPeriodId) {
       alert('Pilih periode dulu sebelum menyimpan data.');
       return;
     }
+    if (importRows.length === 0) return;
+
+    const confirmed = confirm(
+      'Versi ini akan menjadi versi aktif. Versi sebelumnya tetap tersimpan di history.\n\nLanjutkan menyimpan?',
+    );
+    if (!confirmed) return;
+
+    if (!clientRequestIdRef.current) {
+      clientRequestIdRef.current =
+        typeof crypto !== 'undefined' && 'randomUUID' in crypto
+          ? crypto.randomUUID()
+          : `mrp-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+    }
+
+    setIsSavingVersion(true);
     try {
-      const res: any = await bulkUpsert.mutateAsync({
-        records,
-        saveMode,
-        replacePeriod: saveMode === 'overwrite',
+      const res = await saveVersion.mutateAsync({
         periodId: targetPeriodId,
         moduleType,
+        fileName: importFileName || 'import.xlsx',
+        clientRequestId: clientRequestIdRef.current,
+        rows: toUploadRows(importRows),
       });
       setShowImport(false);
       setImportRows([]);
-      alert(`Berhasil import ${res?.count ?? records.length} data ke modul ${MODULE_LABELS[moduleType]}!`);
+      setImportSearch('');
+      setImportFileName('');
+      clientRequestIdRef.current = '';
+      setPeriodTab('history');
+      alert(
+        res.duplicate
+          ? `Data ini sudah tersimpan sebagai Upload ke-${res.data.versionNumber}.`
+          : `Berhasil disimpan sebagai Upload ke-${res.data.versionNumber} pada periode ${res.label}.\nVersi sebelumnya tetap tersimpan di tab History & Compare.`,
+      );
     } catch (err: any) {
       alert(err.message || 'Gagal menyimpan data.');
+    } finally {
+      setIsSavingVersion(false);
     }
   };
 
@@ -383,6 +445,13 @@ export function WeeklyDemand() {
     const q = importSearch.toLowerCase();
     return r.itemCode.toLowerCase().includes(q) || r.description.toLowerCase().includes(q);
   });
+
+  const previewPageCount = Math.max(1, Math.ceil(filteredImport.length / PREVIEW_ROWS_PER_PAGE));
+  const safePreviewPage = Math.min(previewPage, previewPageCount - 1);
+  const pagedImport = filteredImport.slice(
+    safePreviewPage * PREVIEW_ROWS_PER_PAGE,
+    (safePreviewPage + 1) * PREVIEW_ROWS_PER_PAGE,
+  );
 
   const importSummary = useMemo(() => {
     const parts = new Set(importRows.map((r) => r.itemCode));
@@ -568,7 +637,7 @@ export function WeeklyDemand() {
               </p>
             </div>
           )}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
             {periods.map((p) => {
               if (editingPeriodId === p.id) {
                 return (
@@ -602,12 +671,12 @@ export function WeeklyDemand() {
               <div
                 key={p.id}
                 onClick={() => setSelectedPeriodId(p.id)}
-                className="cursor-pointer p-5 border rounded-lg bg-card hover:bg-muted/50 hover:border-primary/50 transition-all flex items-center gap-4 group shadow-sm relative overflow-hidden pr-12"
+                className="cursor-pointer p-5 border rounded-lg bg-card hover:bg-muted/50 hover:border-primary/50 transition-all flex flex-wrap items-center gap-x-4 gap-y-2 group shadow-sm relative overflow-hidden pr-12"
               >
                 <div className="p-3 bg-blue-500/10 rounded-lg group-hover:bg-blue-500/20 transition-colors">
                   <Folder className="w-8 h-8 text-blue-500 fill-blue-500/20" />
                 </div>
-                <div className="min-w-0">
+                <div className="min-w-0 flex-1">
                   <h3 className="font-semibold text-foreground flex items-center gap-1.5">
                     <span className="truncate">{p.label}</span>
                     {p.isLocked && <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
@@ -616,6 +685,7 @@ export function WeeklyDemand() {
                     {p.moduleCounts[moduleType].MRP} baris MRP {MODULE_LABELS[moduleType]}
                   </p>
                 </div>
+                <PeriodMeta period={p} className="w-full" />
                 {isAdmin && (
                   <div className="absolute right-2 top-1/2 -translate-y-1/2 flex flex-col gap-1.5 opacity-0 group-hover:opacity-100 transition-opacity">
                     <button
@@ -664,9 +734,9 @@ export function WeeklyDemand() {
         </div>
       ) : (
       <>
-        <div className="flex items-center gap-3 mb-2 animate-in fade-in slide-in-from-bottom-2">
+        <div className="flex flex-wrap items-center gap-3 mb-2 animate-in fade-in slide-in-from-bottom-2">
           <button 
-            onClick={() => setSelectedPeriodId(null)}
+            onClick={() => { setSelectedPeriodId(null); setPeriodTab('data'); setSearch(''); setRowPage(0); }}
             className="p-2 hover:bg-background rounded-md border text-muted-foreground hover:text-foreground transition-colors shrink-0 bg-card"
             title="Kembali ke daftar periode"
           >
@@ -675,8 +745,87 @@ export function WeeklyDemand() {
           <h3 className="font-semibold text-lg">
             {periodTitle} (26-Week Demand Plan)
           </h3>
+          {/* Tab di dalam periode: data aktif vs riwayat upload (snapshot). */}
+          <div className="ml-auto flex items-center gap-1 border rounded-lg p-1 bg-card">
+            <button
+              onClick={() => setPeriodTab('data')}
+              className={`h-8 px-3 rounded-md text-sm font-medium flex items-center gap-1.5 transition-colors ${
+                periodTab === 'data' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'
+              }`}
+            >
+              <CalendarRange size={14} /> Data Aktif
+            </button>
+            <button
+              onClick={() => setPeriodTab('history')}
+              className={`h-8 px-3 rounded-md text-sm font-medium flex items-center gap-1.5 transition-colors ${
+                periodTab === 'history' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'
+              }`}
+            >
+              <History size={14} /> History &amp; Compare
+            </button>
+          </div>
         </div>
+
+      {periodTab === 'data' && (summaryData?.activeVersion || summaryData?.lastChange) && (
+        <div className="mb-2 flex flex-wrap items-center gap-x-5 gap-y-1 text-xs text-muted-foreground bg-muted/30 border rounded-lg px-3 py-2 animate-in fade-in">
+          <span className="flex items-center gap-1.5">
+            <Info size={13} className="shrink-0" />
+            {summaryData?.activeVersion ? (
+              <>
+                Data aktif dari{' '}
+                <strong className="text-foreground">
+                  Upload ke-{summaryData.activeVersion.versionNumber}
+                </strong>
+                {summaryData.activeVersion.fileName && (
+                  <span className="flex items-center gap-1 text-muted-foreground/80">
+                    <FileSpreadsheet size={11} /> {summaryData.activeVersion.fileName}
+                  </span>
+                )}
+              </>
+            ) : (
+              'Belum ada versi tersimpan untuk data aktif'
+            )}
+          </span>
+          {summaryData?.lastChange && (
+            <span>
+              Diperbarui:{' '}
+              <strong className="text-foreground">{dateTimeLabel(summaryData.lastChange.at)}</strong>
+              {' · '}
+              {summaryData.lastChange.byName ?? '—'}
+              {summaryData.lastChange.kind && (
+                <span className="text-muted-foreground/80">
+                  {' '}
+                  (
+                  {summaryData.lastChange.kind === 'UPLOAD'
+                    ? 'upload'
+                    : summaryData.lastChange.kind === 'EDIT'
+                      ? 'edit manual'
+                      : 'rollback hapus versi'}
+                  )
+                </span>
+              )}
+            </span>
+          )}
+        </div>
+      )}
+
+      {periodTab === 'history' ? (
+        <div className="bg-card text-card-foreground border rounded-lg shadow-sm animate-in fade-in slide-in-from-bottom-2 duration-200">
+          <UploadHistoryPanel
+            periodId={selectedPeriodId}
+            periodLabel={periodTitle}
+            moduleType={moduleType}
+            isAdmin={isAdmin}
+          />
+        </div>
+      ) : (
       <div className="bg-card text-card-foreground border rounded-lg shadow-sm overflow-hidden animate-in fade-in slide-in-from-bottom-2 duration-200">
+        {/* Indikator saat data aktif dimuat ulang (mis. setelah simpan versi baru) */}
+        {isSummaryFetching && !isLoading && (
+          <div className="flex items-center gap-2 px-4 py-1.5 text-xs text-muted-foreground border-b bg-primary/5">
+            <Loader2 size={12} className="animate-spin" /> Memuat data aktif terbaru...
+          </div>
+        )}
         {/* Filter bar */}
         <div className="p-4 border-b bg-muted/10 flex items-center gap-3">
           {isAdmin && selectedItemIds.length > 0 && (
@@ -751,7 +900,8 @@ export function WeeklyDemand() {
               {isLoading ? (
                 <tr>
                   <td colSpan={visibleWeeks.length + (isAdmin ? 4 : 3)} className="p-8 text-center">
-                    Loading...
+                    <Loader2 size={22} className="animate-spin mx-auto text-primary" />
+                    <p className="mt-2 text-sm text-muted-foreground">Memuat data aktif...</p>
                   </td>
                 </tr>
               ) : filteredData.length === 0 ? (
@@ -865,21 +1015,23 @@ export function WeeklyDemand() {
           </div>
         )}
       </div>
+      )}
       </>
       )}
 
       {/* Import Modal */}
       {showImport && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
-          <div className="bg-card text-card-foreground border rounded-lg shadow-xl max-w-5xl w-full max-h-[92vh] flex flex-col">
+          <div className="relative bg-card text-card-foreground border rounded-lg shadow-xl max-w-5xl w-full max-h-[92vh] flex flex-col overflow-hidden">
             {/* Modal Header */}
             <div className="flex justify-between items-center p-6 border-b">
               <h3 className="text-xl font-bold flex items-center gap-2">
                 <Upload size={20} /> Import 26-Week Demand Plan
               </h3>
               <button
-                onClick={() => { setShowImport(false); setImportRows([]); setImportSearch(''); }}
-                className="text-muted-foreground hover:text-foreground text-lg leading-none"
+                onClick={() => { setShowImport(false); setImportRows([]); setImportSearch(''); setImportFileName(''); clientRequestIdRef.current = ''; }}
+                disabled={isSavingVersion || saveVersion.isPending}
+                className="text-muted-foreground hover:text-foreground text-lg leading-none disabled:opacity-40"
               >
                 ✕
               </button>
@@ -928,6 +1080,78 @@ export function WeeklyDemand() {
                     </div>
                   </div>
 
+                  {/* Peringatan format file / PN duplikat */}
+                  {previewVersion.data && previewVersion.data.warnings.length > 0 && (
+                    <div className="text-xs border border-amber-300/60 bg-amber-50 dark:bg-amber-950/30 dark:border-amber-900 rounded-lg px-3 py-2 space-y-1">
+                      <p className="font-semibold text-amber-800 dark:text-amber-300">Periksa file sebelum menyimpan</p>
+                      <ul className="list-disc pl-4 text-amber-900/80 dark:text-amber-200/80 space-y-0.5">
+                        {previewVersion.data.warnings.map((warning) => (
+                          <li key={warning}>{warning}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+
+                  {/* Perbandingan dengan versi sebelumnya (dihitung sebelum disimpan) */}
+                  <div className="border rounded-lg bg-card">
+                    <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2 border-b">
+                      <h4 className="text-sm font-semibold flex items-center gap-2">
+                        <GitCompare size={15} /> Perubahan vs Versi Sebelumnya
+                      </h4>
+                      <span className="text-xs text-muted-foreground">
+                        {previewVersion.isPending ? (
+                          <span className="flex items-center gap-1">
+                            <Loader2 size={12} className="animate-spin" /> Menghitung...
+                          </span>
+                        ) : previewVersion.data?.hasBaseline ? (
+                          <>
+                            Versi baru: <strong>Upload ke-{previewVersion.data.nextVersionNumber}</strong>
+                          </>
+                        ) : null}
+                      </span>
+                    </div>
+                    <div className="p-3 space-y-3">
+                      {!targetPeriodId ? (
+                        <p className="text-xs text-muted-foreground">
+                          Pilih periode dulu untuk melihat perbandingan dengan upload sebelumnya.
+                        </p>
+                      ) : previewVersion.isError ? (
+                        <p className="text-xs text-red-600">{(previewVersion.error as Error).message}</p>
+                      ) : !previewVersion.data ? (
+                        <p className="text-xs text-muted-foreground">Menghitung perbandingan...</p>
+                      ) : !previewVersion.data.hasBaseline ? (
+                        <div className="text-xs bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-900 rounded-md px-3 py-2 text-blue-800 dark:text-blue-300">
+                          <strong>Ini upload pertama</strong> untuk periode{' '}
+                          {targetPeriod?.label ?? 'terpilih'} modul {MODULE_LABELS[moduleType]} — belum ada
+                          versi pembanding.
+                        </div>
+                      ) : (
+                        <>
+                          <p className="text-xs text-muted-foreground">
+                            Pembanding:{' '}
+                            {previewVersion.data.baseline?.source === 'LIVE'
+                              ? 'data aktif (belum tersimpan sebagai versi)'
+                              : `Upload ke-${previewVersion.data.baseline?.versionNumber} · ${dateTimeLabel(
+                                  previewVersion.data.baseline?.uploadedAt,
+                                )}${
+                                  previewVersion.data.baseline?.uploadedByName
+                                    ? ` · ${previewVersion.data.baseline.uploadedByName}`
+                                    : ''
+                                }`}
+                          </p>
+                          <ChangeSummaryCards summary={previewVersion.data.summary} />
+                          <VersionCompareTable
+                            key={`${targetPeriodId}-${moduleType}-${importRows.length}`}
+                            columns={previewVersion.data.columns}
+                            parts={previewVersion.data.parts}
+                            emptyMessage="Tidak ada perubahan dibanding versi sebelumnya."
+                            maxHeightClass="max-h-[35vh]"
+                          />
+                        </>
+                      )}
+                    </div>
+                  </div>
+
                   {/* Periode tanggal sumber */}
                   <div className="flex items-center gap-3">
                     <span className="text-sm font-medium whitespace-nowrap">Rentang Data:</span>
@@ -943,7 +1167,10 @@ export function WeeklyDemand() {
                         placeholder="Cari Part Number / Description..."
                         className="w-full h-9 pl-9 pr-3 border rounded-md bg-background text-sm"
                         value={importSearch}
-                        onChange={(e) => setImportSearch(e.target.value)}
+                        onChange={(e) => {
+                          setImportSearch(e.target.value);
+                          setPreviewPage(0);
+                        }}
                       />
                     </div>
                     <span className="text-xs text-muted-foreground whitespace-nowrap">
@@ -964,7 +1191,7 @@ export function WeeklyDemand() {
                         </tr>
                       </thead>
                       <tbody className="divide-y divide-border">
-                        {filteredImport.map((row) => (
+                        {pagedImport.map((row) => (
                           <tr key={row.id} className="hover:bg-muted/40">
                             <td className="px-4 py-2 font-medium">{row.itemCode}</td>
                             <td className="px-4 py-2 text-muted-foreground max-w-[200px] truncate" title={row.description}>
@@ -1017,40 +1244,86 @@ export function WeeklyDemand() {
                       </tbody>
                     </table>
                   </div>
+
+                  {/* Paginasi pratinjau — wajib: merender semua baris x semua minggu
+                      sekaligus membuat browser freeze pada file besar. */}
+                  {filteredImport.length > PREVIEW_ROWS_PER_PAGE && (
+                    <div className="flex items-center justify-between text-xs text-muted-foreground">
+                      <span>
+                        Menampilkan {safePreviewPage * PREVIEW_ROWS_PER_PAGE + 1}–
+                        {Math.min((safePreviewPage + 1) * PREVIEW_ROWS_PER_PAGE, filteredImport.length)} dari{' '}
+                        {filteredImport.length.toLocaleString('id-ID')} part
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <button
+                          type="button"
+                          onClick={() => setPreviewPage((page) => Math.max(0, page - 1))}
+                          disabled={safePreviewPage === 0}
+                          className="h-7 w-7 flex items-center justify-center border rounded hover:bg-muted disabled:opacity-40"
+                        >
+                          <ChevronLeft size={13} />
+                        </button>
+                        <span>
+                          {safePreviewPage + 1}/{previewPageCount}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => setPreviewPage((page) => Math.min(previewPageCount - 1, page + 1))}
+                          disabled={safePreviewPage >= previewPageCount - 1}
+                          className="h-7 w-7 flex items-center justify-center border rounded hover:bg-muted disabled:opacity-40"
+                        >
+                          <ChevronRight size={13} />
+                        </button>
+                      </div>
+                    </div>
+                  )}
                 </>
               )}
             </div>
 
             {/* Modal Footer */}
             <div className="p-5 border-t flex flex-wrap justify-between items-center gap-3 bg-muted/10">
-              <p className="text-xs text-muted-foreground">
-                Save Overwrite mengganti seluruh data MRP pada periode dan modul terpilih.
+              <p className="text-xs text-muted-foreground max-w-xl">
+                <strong>Save Overwrite</strong> menyimpan file ini sebagai{' '}
+                <strong>versi baru (Upload ke-{previewVersion.data?.nextVersionNumber ?? 1})</strong> dan
+                menjadikannya versi aktif untuk periode &amp; modul terpilih. Versi sebelumnya tidak dihapus
+                — tetap tersimpan di tab <em>History &amp; Compare</em>.
               </p>
               <div className="flex justify-end gap-3">
               <button
-                onClick={() => { setShowImport(false); setImportRows([]); }}
-                className="h-10 border px-6 rounded-md font-medium hover:bg-muted text-sm transition-colors"
+                onClick={() => { setShowImport(false); setImportRows([]); setImportSearch(''); setImportFileName(''); }}
+                disabled={isSavingVersion || saveVersion.isPending}
+                className="h-10 border px-6 rounded-md font-medium hover:bg-muted text-sm transition-colors disabled:opacity-50"
               >
                 Batal
               </button>
               <button
-                onClick={() => handleBulkSave('add')}
-                disabled={bulkUpsert.isPending || importRows.length === 0 || !targetPeriodId}
-                className="h-10 bg-green-600 hover:bg-green-700 text-white px-6 rounded-md font-medium flex items-center gap-2 disabled:opacity-50 text-sm transition-colors"
-              >
-                <Plus size={16} />
-                {bulkUpsert.isPending ? 'Menyimpan...' : 'Save (Add)'}
-              </button>
-              <button
-                onClick={() => handleBulkSave('overwrite')}
-                disabled={bulkUpsert.isPending || importRows.length === 0 || !targetPeriodId}
+                onClick={handleVersionSave}
+                disabled={isSavingVersion || saveVersion.isPending || importRows.length === 0 || !targetPeriodId}
                 className="h-10 bg-slate-900 dark:bg-slate-700 hover:bg-slate-800 text-white px-6 rounded-md font-medium flex items-center gap-2 disabled:opacity-50 text-sm transition-colors"
               >
-                <Save size={16} />
-                {bulkUpsert.isPending ? 'Menyimpan...' : 'Save Overwrite'}
+                {isSavingVersion || saveVersion.isPending ? <Loader2 size={16} className="animate-spin" /> : <Save size={16} />}
+                {isSavingVersion || saveVersion.isPending ? 'Menyimpan...' : 'Save Overwrite'}
               </button>
               </div>
             </div>
+
+            {/* Overlay proses: membaca file (worker) / menyimpan versi baru */}
+            {(isParsingFile || isSavingVersion || saveVersion.isPending) && (
+              <div className="absolute inset-0 z-30 bg-card/85 backdrop-blur-sm flex items-center justify-center">
+                <div className="text-center space-y-3 px-8">
+                  <Loader2 size={34} className="animate-spin mx-auto text-primary" />
+                  <p className="text-sm font-semibold">
+                    {isParsingFile ? 'Membaca file Excel...' : 'Menyimpan versi baru...'}
+                  </p>
+                  <p className="text-xs text-muted-foreground max-w-sm">
+                    {isParsingFile
+                      ? `${importFileName ? `${importFileName} · ` : ''}file besar bisa butuh beberapa detik. Mohon tunggu, halaman tetap bisa dipakai.`
+                      : 'Snapshot sedang dibuat dan data aktif sedang diperbarui. Jangan tutup halaman ini.'}
+                  </p>
+                </div>
+              </div>
+            )}
           </div>
         </div>
       )}

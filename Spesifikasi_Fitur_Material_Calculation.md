@@ -183,3 +183,134 @@ Struktur output di draf awal (Poin 13) sebelumnya masih menampilkan Part Number 
 6. **Istilah "BI Total" ditandai perlu konfirmasi** ke tim bisnis karena singkatannya tidak dijelaskan di dokumen asli.
 7. Formula WIP gabungan (sheet + pcs) dicek ulang secara matematis — hasilnya konsisten dengan dua kasus sederhana (hanya sheet / hanya pcs), sehingga bisa diimplementasikan sebagai satu formula umum saja.
 8. Semua angka contoh di draf asli **sudah diverifikasi secara matematis dan benar** (16.000 sheet, 1.904,032 kg, 15.750 sheet, 1.874,2815 kg, 12.750 sheet, 1.517,2755 kg, 279,2715 kg, dll.) — tidak ada kesalahan hitung, hanya perlu kerapian struktur dan penamaan.
+
+---
+
+## 9. Rekomendasi Ukuran Material & Informasi Waste
+
+### 9.1 Tujuan & sifat fitur
+
+Menampilkan **ukuran material yang lebih besar/kelipatan** dari ukuran kebutuhan beserta **estimasi waste** (buangan) dari pemakaian ukuran tersebut.
+
+**Fitur ini INFORMASI murni** (keputusan user 2026-10-28):
+
+- Tidak mengubah alokasi stok/PO, `Hotlist`, `Allowance 5%`, `WIP`, `Shortage`, `Stock As Of`, maupun `End Ind`.
+- **Trim belum diperhitungkan** ke alokasi. Karena itu setiap panel wajib menampilkan catatan tersebut, dan angka waste tidak boleh disamakan dengan angka kekurangan.
+- Tidak ada endpoint baru dan tidak ada migrasi database: hasil disimpan di dalam `CycleResult.resultSnapshot` (JSON).
+
+### 9.2 Definisi waste
+
+> **Waste ukuran (trim)** = bagian material yang dipakai tetapi tidak menjadi ukuran kebutuhan, karena ukuran material lebih besar/kelipatan.
+
+Contoh: kebutuhan **59 × 60 cm**, material **roll 60 cm** → kelebihan **1 cm** per lembar, `multiplier = 1` (60 ÷ 2 = 30 cm tidak cukup untuk 2 potong).
+
+```
+m         = jumlah potong ukuran kebutuhan per satuan material (1..6)
+ratio     = luas material ÷ luas kebutuhan  (gulungan: lebar ÷ lebar)
+waste/lbr = fm × (ratio/m − 1)              (kg per lembar kebutuhan)
+waste %   = 1 − m / ratio                   (murni geometri)
+```
+
+Material **118 cm** untuk kebutuhan **59 cm** menghasilkan `m = 2`, `ratio = 2` → waste **0%**, walaupun ukurannya jauh lebih besar. Inilah bedanya "kelebihan yang berguna" dan "kelebihan yang terbuang".
+
+### 9.3 Dua basis waste
+
+Keduanya memakai rumus yang sama; hanya **Q** (jumlah lembar) yang berbeda:
+
+| Basis | Q | Arti |
+|---|---|---|
+| **Waste pembelian** | `Σ shortageSheet` per part | Waste dari material yang benar-benar perlu dibeli pada periode ini |
+| **Waste produksi** | `Σ sheetsNet2` per part | Waste bila ukuran tersebut dipakai untuk SELURUH kebutuhan produksi bersih (termasuk yang sudah ditutup stok/hotlist/WIP) |
+
+```
+stockUnits(Q)    = CEIL(Q / m)              (gulungan: Q / m, tanpa pembulatan)
+kgMaterial(Q)    = stockUnits × fm × ratio
+kgUsed(Q)        = Q × fm
+trimWaste(Q)     = Q × fm × (ratio/m − 1)
+roundingWaste(Q) = kgMaterial − kgUsed − trimWaste   (sisa pembulatan lembar)
+totalWaste(Q)    = trimWaste + roundingWaste
+```
+
+Contoh (kebutuhan 59 × 60 cm, `fm = 0,15 kg/lbr`, roll 60 cm, kebutuhan 10.000 lbr, tanpa pembelian):
+
+- Waste pembelian = **0 kg** (tidak ada yang dibeli)
+- Waste produksi = 10.000 × 0,15 × (60/59 − 1) = **25,42 kg** (1,67%)
+- Roll terpakai = **1.525,42 kg**; sisa sistem masih 1.000 kg karena trim belum diterapkan
+
+### 9.4 Kandidat ukuran
+
+| Sumber | Keterangan |
+|---|---|
+| Stok & Outstanding PO | Mengikuti aturan `matchSize()` yang sama dengan alokasi (gramatur sama, supplier sama bila `MATERIAL_REQUIRE_SUPPLIER=true`, lebar ≥ kebutuhan, selisih ≤ toleransi, atau kelipatan 2–6 dengan panjang sama) |
+| NPOF | Ukuran yang pernah dipakai part lain dengan gramatur & supplier sama (belum tentu ada stok) |
+| Ukuran standar | Daftar `MATERIAL_REC_STANDARD_SIZES` (default `180` cm, jumbo roll) |
+| Ukuran pas | Selalu disertakan sebagai pembanding (waste 0%), tidak dianggap tersedia |
+
+Kandidat yang **dikeluarkan user** untuk grup tersebut (`material_calc_exclusions`) tidak dihitung ketersediaannya. Ketersediaan dihitung dari sisa nyata setelah alokasi (`pool.kgRemaining/sheetRemaining` − pemakaian − bagian yang dikeluarkan).
+
+### 9.5 Urutan rekomendasi
+
+1. Bisa dipenuhi sebelum kebutuhan (stok sekarang, atau PO tiba ≤ minggu kebutuhan pertama)
+2. Waste per lembar terkecil
+3. Kg material terkecil (pembelian; bila tidak ada pembelian dipakai kg produksi)
+4. Ukuran fisik terkecil
+5. Potongan per lembar terbanyak
+
+### 9.6 Tampilan
+
+Tab ketiga **"Rekomendasi & Waste"** pada tiap baris ukuran: konteks kebutuhan, disclaimer, tabel semua opsi (ukuran, sumber, potong/lbr, kelebihan cm, waste per lembar, waste pembelian, waste produksi, ketersediaan, catatan), dan baris pembanding ukuran pas. Baris grup juga menampilkan badge kecil `Waste ±X%` bila rekomendasi menghasilkan trim.
+
+Belum ada ekspor PDF/Excel untuk bagian ini (sesuai permintaan).
+
+### 9.7 Konfigurasi
+
+| Env | Default | Fungsi |
+|---|---|---|
+| `MATERIAL_REC_MAX_OPTIONS` | `8` | Jumlah alternatif per grup |
+| `MATERIAL_REC_MAX_MULTIPLIER` | `6` | Kelipatan maksimum yang diuji |
+| `MATERIAL_REC_INCLUDE_NPOF` | `true` | Sertakan ukuran dari NPOF |
+| `MATERIAL_REC_STANDARD_SIZES` | `180` | Ukuran standar (cm), dipisah koma |
+
+### 9.8 Waste dari pemakaian nyata (stok & PO)
+
+Selain dua basis skenario di §9.3, ada **waste pemakaian nyata**: waste dari lot stok dan baris Outstanding PO yang **benar-benar terpakai** grup ukuran tersebut.
+
+```
+wasteKg  = usedKg × (ratio/m − 1)
+wastePct = 1 − m/ratio            (porsi terbuang dari material yang dipakai)
+```
+
+`usedKg` = kg yang menjadi produk (bagian teralokasi). Contoh: produk 1.575 kg dari roll 60 cm untuk kebutuhan 59 cm → material terpakai 1.601,69 kg, waste **26,69 kg (1,67%)**.
+
+Ditampilkan di:
+
+| Lokasi | Isi |
+|---|---|
+| Baris `Stock As Of` (Material Calculation) | Badge `Waste X kg (Y%)` + kolom **Waste** per lot + baris total di dropdown rincian stok |
+| Baris `Outstanding PO` | Badge `Waste PO X kg (Y%)` + kolom **Waste** per nomor PO |
+| Snapshot hasil | `weeklyMatrix.summary.stockWasteKg/stockWastePct/poWasteKg/poWastePct`, per lot `wasteKg/wastePct/trimWidthCm` |
+
+**Penting:** angka ini juga informasi saja — tidak mengurangi `stockAsOf`, `outstandingPo`, `shortage`, maupun `endInd`.
+
+Catatan teknis: `sizeRatio()` mengabaikan "panjang" yang bukan dimensi sungguhan (mis. `DUPLEX 450GSM/ 69CM (27")` — 27 adalah inci) dan tidak pernah menghasilkan rasio < 1, sehingga waste tidak bisa negatif.
+
+### 9.9 Rekomendasi alokasi di menu Raw Material Stock
+
+Halaman **Raw Material Stock** (Material Planning) menampilkan panel **"Rekomendasi alokasi material"** saat sebuah item di-expand. Panel itu menjawab: *lot ini bisa dipakai untuk part number / ukuran mana saja, dan berapa waste-nya.*
+
+- Sumber daftar part = snapshot hasil perhitungan periode terpilih (`CycleResult.resultSnapshot`), sehingga konsisten dengan halaman Material Calculation.
+- Aturan cocok sama dengan alokasi: gramatur sama, supplier sama (bila `MATERIAL_REQUIRE_SUPPLIER=true`), lebar ≥ kebutuhan, selisih ≤ toleransi, atau kelipatan 2–6.
+- Kolom: Part Number, Ukuran & Gramatur, Kebutuhan (lbr/kg), Potong/lbr, Waste per lembar, Bisa dialokasikan (kg), Estimasi waste (kg), Terpakai di ukuran ini (kg).
+- Endpoint: `GET /api/v1/stock-raw-material/allocation-recommendation?periodId=&itemDesc=&supplier=`. Read-only; periode yang belum dihitung menampilkan ajakan menjalankan Hitung.
+
+### 9.10 Lokasi kode
+
+| Bagian | File |
+|---|---|
+| Pencocokan ukuran/gramatur (dipindah agar tidak ada impor melingkar) | `apps/api/src/lib/materialSizeMatch.ts` |
+| Perhitungan rekomendasi & waste | `apps/api/src/lib/materialSizeRecommendation.ts` |
+| Integrasi ke hasil perhitungan | `apps/api/src/lib/materialCalcEngine.ts` (`MaterialGroupResult.sizeRecommendation`) |
+| Panel UI (Material Calculation) | `apps/web/src/components/SizeRecommendationPanel.tsx` |
+| Panel UI (Raw Material Stock) | `apps/web/src/components/StockAllocationPanel.tsx` |
+| Endpoint rekomendasi alokasi | `apps/api/src/routes/stockRawMaterial.ts` |
+| Verifikasi | `apps/api/verify-size-recommendation.ts` (`pnpm --filter @pdits/api verify:size-recommendation`) |

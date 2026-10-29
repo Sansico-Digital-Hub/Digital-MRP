@@ -60,6 +60,7 @@ import { usePeriods, periodDisplayLabel } from '../hooks/usePeriods';
 import { useAuthStore } from '../stores/authStore';
 import { exportAllMaterialTypesZip, exportMaterialTypePdf } from '../lib/materialCalcExport';
 import { materialTypeLabel } from '../lib/materialCalcPdf';
+import { SizeRecommendationPanel } from '../components/SizeRecommendationPanel';
 
 // ── Format angka & tanggal ────────────────────────────────────────────────
 
@@ -572,6 +573,7 @@ function StockDetailPanel({
       {details.length === 0 ? (
         <div className="px-3 py-2 text-[11px] text-gray-500">{t('materialCalc.stockDetail.empty')}</div>
       ) : (
+        <div className="overflow-x-auto">
         <table className="w-full text-[11px]">
           <thead className="text-gray-500">
             <tr>
@@ -582,6 +584,9 @@ function StockDetailPanel({
               <th className="px-3 py-1 text-right font-medium">{t('materialCalc.stockDetail.equivalent')}</th>
               <th className="px-3 py-1 text-right font-medium">{t('materialCalc.stockDetail.excluded')}</th>
               <th className="px-3 py-1 text-right font-medium">{t('materialCalc.stockDetail.allocated')}</th>
+              <th className="px-3 py-1 text-right font-medium" title={t('materialCalc.stockDetail.wasteHint')}>
+                {t('materialCalc.stockDetail.waste')}
+              </th>
               <th className="px-3 py-1 text-left font-medium">{t('materialCalc.stockDetail.note')}</th>
               <th className="px-3 py-1 text-left font-medium">{t('materialCalc.poolEdit.action')}</th>
             </tr>
@@ -605,6 +610,19 @@ function StockDetailPanel({
                 </td>
                 <td className="px-3 py-1 text-right font-medium text-gray-800">
                   {stockQtyText(d.allocatedKg, d.allocatedSheet, lang)}
+                </td>
+                <td className="px-3 py-1 text-right whitespace-nowrap">
+                  {d.wasteKg && d.wasteKg > 0 ? (
+                    <>
+                      <span className="text-amber-700">{formatNum(d.wasteKg, 2, lang)} kg</span>
+                      <div className="text-[10px] text-gray-500">
+                        {formatNum((d.wastePct ?? 0) * 100, 2, lang)}%
+                        {d.trimWidthCm ? ` · +${formatNum(d.trimWidthCm, 1, lang)} cm` : ''}
+                      </div>
+                    </>
+                  ) : (
+                    <span className="text-gray-400">—</span>
+                  )}
                 </td>
                 <td className="px-3 py-1 text-gray-600">
                   {d.multiplier > 1
@@ -642,7 +660,37 @@ function StockDetailPanel({
               </tr>
             ))}
           </tbody>
+          {(() => {
+            const allocated = details.reduce((s, d) => s + (d.excluded ? 0 : d.allocatedKg || 0), 0);
+            const waste = details.reduce((s, d) => s + (d.excluded ? 0 : d.wasteKg || 0), 0);
+            if (waste <= 0) return null;
+            return (
+              <tfoot className="bg-amber-50/60">
+                <tr>
+                  <td colSpan={6} className="px-3 py-1 text-[11px] font-semibold text-amber-900">
+                    {t('materialCalc.stockDetail.wasteTotal')}
+                  </td>
+                  <td className="px-3 py-1 text-right text-[11px] font-medium text-gray-800">
+                    {formatNum(allocated, 2, lang)} kg
+                  </td>
+                  <td className="px-3 py-1 text-right text-[11px] font-semibold text-amber-800 whitespace-nowrap">
+                    {formatNum(waste, 2, lang)} kg
+                    <div className="text-[10px] font-normal text-gray-500">
+                      {allocated + waste > 0
+                        ? formatNum((waste / (allocated + waste)) * 100, 2, lang)
+                        : '0'}
+                      %
+                    </div>
+                  </td>
+                  <td colSpan={2} className="px-3 py-1 text-[10px] text-gray-500">
+                    {t('materialCalc.stockDetail.wasteHint')}
+                  </td>
+                </tr>
+              </tfoot>
+            );
+          })()}
         </table>
+        </div>
       )}
     </div>
   );
@@ -679,6 +727,12 @@ interface PoDetailRow {
   allocatedSheet: number;
   remainingKg: number;
   remainingSheet: number;
+  /** Waste dari bagian PO yang terpakai grup ini (kg) — INFORMASI. */
+  wasteKg: number;
+  /** Kg material PO terpakai (= penyebut persentase). */
+  wasteBaseKg: number;
+  /** Kelebihan lebar per potong (cm). */
+  trimWidthCm: number;
 }
 
 function buildPoDetailRows(byWeek: OutstandingPoDetail[][]): PoDetailRow[] {
@@ -709,6 +763,9 @@ function buildPoDetailRows(byWeek: OutstandingPoDetail[][]): PoDetailRow[] {
           allocatedSheet: 0,
           remainingKg: 0,
           remainingSheet: 0,
+          wasteKg: 0,
+          wasteBaseKg: 0,
+          trimWidthCm: 0,
         };
         map.set(key, row);
       }
@@ -729,6 +786,9 @@ function buildPoDetailRows(byWeek: OutstandingPoDetail[][]): PoDetailRow[] {
       row.allocatedSheet += d.allocatedSheet;
       row.remainingKg += d.remainingKg;
       row.remainingSheet += d.remainingSheet;
+      row.wasteKg += d.wasteKg ?? 0;
+      row.wasteBaseKg += d.wasteBaseKg ?? 0;
+      row.trimWidthCm = Math.max(row.trimWidthCm, d.trimWidthCm ?? 0);
     }
   }
   return [...map.values()].sort(
@@ -768,6 +828,7 @@ function PoDetailPanel({
       {rows.length === 0 ? (
         <div className="px-3 py-2 text-[11px] text-gray-500">{t('materialCalc.poDetail.empty')}</div>
       ) : (
+        <div className="overflow-x-auto">
         <table className="w-full text-[11px]">
           <thead className="text-gray-500">
             <tr>
@@ -778,6 +839,9 @@ function PoDetailPanel({
               <th className="px-3 py-1 text-right font-medium">{t('materialCalc.poDetail.qty')}</th>
               <th className="px-3 py-1 text-right font-medium">{t('materialCalc.poDetail.excluded')}</th>
               <th className="px-3 py-1 text-right font-medium">{t('materialCalc.poDetail.allocated')}</th>
+              <th className="px-3 py-1 text-right font-medium" title={t('materialCalc.poDetail.wasteHint')}>
+                {t('materialCalc.poDetail.waste')}
+              </th>
               <th className="px-3 py-1 text-right font-medium">{t('materialCalc.poDetail.remaining')}</th>
               <th className="px-3 py-1 text-left font-medium">{t('materialCalc.poolEdit.action')}</th>
             </tr>
@@ -815,6 +879,22 @@ function PoDetailPanel({
                 <td className="px-3 py-1 text-right font-medium text-gray-800">
                   {stockQtyText(r.allocatedKg, r.allocatedSheet, lang)}
                 </td>
+                <td className="px-3 py-1 text-right whitespace-nowrap">
+                  {r.wasteKg > 0 ? (
+                    <>
+                      <span className="text-amber-700">{formatNum(r.wasteKg, 2, lang)} kg</span>
+                      <div className="text-[10px] text-gray-500">
+                        {r.wasteBaseKg + r.wasteKg > 0
+                          ? formatNum((r.wasteKg / (r.wasteBaseKg + r.wasteKg)) * 100, 2, lang)
+                          : '0'}
+                        %
+                        {r.trimWidthCm > 0 ? ` · +${formatNum(r.trimWidthCm, 1, lang)} cm` : ''}
+                      </div>
+                    </>
+                  ) : (
+                    <span className="text-gray-400">—</span>
+                  )}
+                </td>
                 <td className="px-3 py-1 text-right text-gray-700">
                   {stockQtyText(r.remainingKg, r.remainingSheet, lang)}
                 </td>
@@ -837,6 +917,7 @@ function PoDetailPanel({
             ))}
           </tbody>
         </table>
+        </div>
       )}
     </div>
   );
@@ -966,6 +1047,17 @@ function WeeklyMatrixTable({ matrix, edit }: { matrix: WeeklyMatrix; edit: PoolE
                     </span>
                   )}
                 </button>
+                {(summary.stockWasteKg ?? 0) > 0 && (
+                  <span
+                    className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5"
+                    title={t('materialCalc.stockDetail.wasteHint')}
+                  >
+                    {t('materialCalc.stockDetail.wasteBadge', {
+                      kg: formatNum(summary.stockWasteKg, 2, lang),
+                      pct: formatNum((summary.stockWastePct ?? 0) * 100, 2, lang),
+                    })}
+                  </span>
+                )}
               </div>
             </td>
             <UnitCell sheet={summary.stockAsOfSheet} kg={summary.stockAsOfSheet * groupFm} hasKg={hasGroupKg} showKg />
@@ -1007,6 +1099,17 @@ function WeeklyMatrixTable({ matrix, edit }: { matrix: WeeklyMatrix; edit: PoolE
                     </span>
                   ) : null}
                 </button>
+                {(summary.poWasteKg ?? 0) > 0 && (
+                  <span
+                    className="text-[10px] font-medium text-amber-700 bg-amber-50 border border-amber-200 rounded px-1.5 py-0.5"
+                    title={t('materialCalc.poDetail.wasteHint')}
+                  >
+                    {t('materialCalc.poDetail.wasteBadge', {
+                      kg: formatNum(summary.poWasteKg, 2, lang),
+                      pct: formatNum((summary.poWastePct ?? 0) * 100, 2, lang),
+                    })}
+                  </span>
+                )}
               </div>
             </td>
             {Array.from({ length: width }).map((_, i) => (
@@ -1176,7 +1279,7 @@ function GroupRow({
 }) {
   const { t, lang } = useTranslation();
   const [expanded, setExpanded] = useState(false);
-  const [tab, setTab] = useState<'matrix' | 'detail'>('matrix');
+  const [tab, setTab] = useState<'matrix' | 'detail' | 'recommend'>('matrix');
   const planningTimeline = group.planningTimeline || getFallbackTimeline(group.leadTimeMonths);
   const estimatedInGroup = group.details.filter((d) => d.noNpofData).length;
 
@@ -1225,6 +1328,18 @@ function GroupRow({
               {t('materialCalc.group.partsIncomplete', {
                 estimated: formatNum(estimatedInGroup, 0, lang),
                 total: formatNum(group.details.length, 0, lang),
+              })}
+            </div>
+          )}
+          {group.sizeRecommendation?.best && group.sizeRecommendation.best.wastePctPerSheet > 0.0005 && (
+            <div
+              className="text-[11px] font-normal text-gray-500"
+              title={t('materialCalc.recommendation.rowBadgeTitle', {
+                size: group.sizeRecommendation.best.size,
+              })}
+            >
+              {t('materialCalc.recommendation.rowBadge', {
+                value: formatNum(group.sizeRecommendation.best.wastePctPerSheet * 100, 1, lang),
               })}
             </div>
           )}
@@ -1302,14 +1417,27 @@ function GroupRow({
               >
                 {t('materialCalc.matrix.tabDetail')}
               </button>
+              <button
+                type="button"
+                onClick={() => setTab('recommend')}
+                className={`px-3 py-1.5 text-xs rounded-md ${
+                  tab === 'recommend' ? 'bg-indigo-600 text-white' : 'bg-white border text-gray-700'
+                }`}
+              >
+                {t('materialCalc.recommendation.tab')}
+              </button>
               <span className="text-[11px] text-gray-500">
-                {t('materialCalc.matrix.unitNote')}
+                {tab === 'recommend'
+                  ? t('materialCalc.recommendation.disclaimerTitle')
+                  : t('materialCalc.matrix.unitNote')}
               </span>
             </div>
             {tab === 'matrix' ? (
               <WeeklyMatrixTable matrix={group.weeklyMatrix} edit={poolEdit} />
-            ) : (
+            ) : tab === 'detail' ? (
               <DetailTable details={group.details} />
+            ) : (
+              <SizeRecommendationPanel recommendation={group.sizeRecommendation} />
             )}
           </td>
         </tr>
@@ -1957,7 +2085,7 @@ export function MaterialCalc() {
   );
 
   const { data: npofCheck } = useNpofCheck(cycleId, Boolean(activeCycle?.currentResult));
-  const { data: expiredData } = useExpiredCycles();
+  const { data: expiredData } = useExpiredCycles(canEditMaterial);
 
   const createCycle = useCreateCycle();
   const calculate = useCalculateCycle();
@@ -2409,14 +2537,16 @@ export function MaterialCalc() {
               </button>
             ))}
 
-            <button
-              type="button"
-              onClick={() => setShowNewPeriod(true)}
-              className="p-5 border-2 border-dashed rounded-lg bg-white hover:border-indigo-400 hover:bg-indigo-50/30 transition-colors flex items-center gap-3 text-gray-500"
-            >
-              <Plus className="w-6 h-6" />
-              <span className="font-medium">{t('materialCalc.periods.create')}</span>
-            </button>
+            {canEditMaterial && (
+              <button
+                type="button"
+                onClick={() => setShowNewPeriod(true)}
+                className="p-5 border-2 border-dashed rounded-lg bg-white hover:border-indigo-400 hover:bg-indigo-50/30 transition-colors flex items-center gap-3 text-gray-500"
+              >
+                <Plus className="w-6 h-6" />
+                <span className="font-medium">{t('materialCalc.periods.create')}</span>
+              </button>
+            )}
           </div>
         </div>
       )}
@@ -2474,19 +2604,21 @@ export function MaterialCalc() {
 
               <div className="flex-1" />
 
-              <button
-                type="button"
-                onClick={handleCalculate}
-                disabled={calculate.isPending || activeCycle.isLocked}
-                className="btn btn-primary shrink-0"
-              >
-                {calculate.isPending ? (
-                  <Loader2 className="w-4 h-4 mr-2 animate-spin" />
-                ) : (
-                  <RefreshCw className="w-4 h-4 mr-2" />
-                )}
-                {calculate.isPending ? t('materialCalc.calculating') : dataStatus?.hasResult ? t('materialCalc.recalculate') : t('materialCalc.calculate')}
-              </button>
+              {canEditMaterial && (
+                <button
+                  type="button"
+                  onClick={handleCalculate}
+                  disabled={calculate.isPending || activeCycle.isLocked}
+                  className="btn btn-primary shrink-0"
+                >
+                  {calculate.isPending ? (
+                    <Loader2 className="w-4 h-4 mr-2 animate-spin" />
+                  ) : (
+                    <RefreshCw className="w-4 h-4 mr-2" />
+                  )}
+                  {calculate.isPending ? t('materialCalc.calculating') : dataStatus?.hasResult ? t('materialCalc.recalculate') : t('materialCalc.calculate')}
+                </button>
+              )}
             </div>
           </div>
 
@@ -2502,15 +2634,17 @@ export function MaterialCalc() {
                   </div>
                 )}
               </div>
-              <button
-                type="button"
-                onClick={handleCalculate}
-                disabled={calculate.isPending || activeCycle.isLocked}
-                className="btn btn-primary shrink-0"
-              >
-                <RefreshCw className="w-4 h-4 mr-2" />
-                {t('materialCalc.recalculate')}
-              </button>
+              {canEditMaterial && (
+                <button
+                  type="button"
+                  onClick={handleCalculate}
+                  disabled={calculate.isPending || activeCycle.isLocked}
+                  className="btn btn-primary shrink-0"
+                >
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  {t('materialCalc.recalculate')}
+                </button>
+              )}
             </div>
           )}
 
@@ -3112,7 +3246,7 @@ export function MaterialCalc() {
       )}
 
       {/* Modal retensi */}
-      {retentionTarget && (
+      {canEditMaterial && retentionTarget && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setRetentionTarget(null)}>
           <div className="bg-white rounded-lg shadow-xl w-full max-w-lg" onClick={(e) => e.stopPropagation()}>
             <div className="border-b px-6 py-4 font-semibold text-gray-900">{t('materialCalc.retention.title')}</div>
@@ -3178,7 +3312,7 @@ export function MaterialCalc() {
       )}
 
       {/* Pemberitahuan retensi (tidak menutupi halaman) */}
-      {expired.length > 0 && !retentionTarget && (
+      {canEditMaterial && expired.length > 0 && !retentionTarget && (
         <div className="rounded-lg border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800 flex items-start justify-between gap-4">
           <div>
             {t('materialCalc.retention.notice', { count: expired.length })}

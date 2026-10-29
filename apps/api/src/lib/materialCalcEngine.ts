@@ -10,7 +10,23 @@
  * diuji dan periode lama tetap stabil walau dihitung ulang kapan saja.
  */
 
-import { canonicalSupplier, supplierLeadTimeMonths } from './supplierAlias';
+import { canonicalSupplier, supplierLeadTimeMonths, supplierOk } from './supplierAlias';
+import {
+  MAX_SIZE_MULTIPLIER,
+  NEBENG_PATTERN,
+  matchSize,
+  parseDims,
+  parseGsm,
+  type SizeMatch,
+} from './materialSizeMatch';
+import {
+  buildGroupRecommendation,
+  sizeRatio,
+  wasteOfUsage,
+  type GroupSizeRecommendation,
+  type RecommendationOptions,
+} from './materialSizeRecommendation';
+import { KG_PER_TON, isRimUnit, isSheetUnit, isTonUnit } from './stockUnits';
 
 // ============================================
 // Konstanta
@@ -19,24 +35,8 @@ import { canonicalSupplier, supplierLeadTimeMonths } from './supplierAlias';
 /** Lokasi WIP yang satuannya lembar; selain ini dihitung pcs. */
 const WIP_SHEET_LOCATIONS = ['blister', 'uv', 'varnish opp', 'die cut'];
 
-/** Satuan yang berarti "lembar". Data nyata memakai "sht", bukan "sheet". */
-const SHEET_UNITS = ['sheet', 'sheets', 'sht', 'lbr', 'lembar'];
-
-/** Satuan yang berarti "rim" (1 rim = `sheetsPerRim` lembar). */
-const RIM_UNITS = ['rim', 'ream'];
-
-/**
- * Satuan yang berarti "ton". Master Data Outstanding PO memakai singkatan "t",
- * jadi tanpa daftar ini barisnya dianggap satuan tak dikenal dan seluruh PO-nya
- * dibuang dari kolam (mis. PO `I1G000349` 450gsm/120cm 10 t milik HANCHANG).
- */
-const TON_UNITS = ['t', 'ton', 'tons', 'tonne', 'tonnes'];
-
-/** 1 ton = 1.000 kg. */
-const KG_PER_TON = 1000;
-
-/** Item dengan penanda ini tidak dihitung. */
-export const NEBENG_PATTERN = /nebeng|satu\s*layout|tidak\s*dihitung/i;
+// NEBENG_PATTERN di-re-export dari `materialSizeMatch.ts` (lihat blok
+// "Pencocokan material" di bawah).
 
 /** Rata-rata jumlah minggu per bulan, dipakai menerjemahkan lead time bulan -> minggu. */
 const WEEKS_PER_MONTH = 52 / 12;
@@ -95,154 +95,19 @@ export function getWipUnit(location: string): 'sheet' | 'pcs' {
   return WIP_SHEET_LOCATIONS.some((l) => loc.includes(l)) ? 'sheet' : 'pcs';
 }
 
-export function isSheetUnit(unit: string | null | undefined): boolean {
-  return SHEET_UNITS.includes(String(unit || '').trim().toLowerCase());
-}
-
-export function isRimUnit(unit: string | null | undefined): boolean {
-  return RIM_UNITS.includes(String(unit || '').trim().toLowerCase());
-}
-
-export function isTonUnit(unit: string | null | undefined): boolean {
-  return TON_UNITS.includes(String(unit || '').trim().toLowerCase());
-}
-
-/** Kg dari qty yang satuannya `unit` (ton dikali 1.000). 0 = satuan tak dikenal. */
-export function toKilogram(qty: number, unit: string | null | undefined): number {
-  const u = String(unit || '').trim().toLowerCase();
-  if (u === 'kg' || u === 'kgs' || u === 'kilogram') return qty;
-  if (isTonUnit(u)) return qty * KG_PER_TON;
-  return 0;
-}
+// Helper satuan tinggal di `stockUnits.ts` (satu sumber kebenaran), tetap
+// di-re-export dari sini karena modul ini sudah lama memakainya.
+export { isSheetUnit, isRimUnit, isTonUnit, toKilogram } from './stockUnits';
 
 // ============================================
 // Pencocokan material: gramatur + ukuran
 // ============================================
 
-const normalizeNumText = (text: string | null | undefined) =>
-  String(text || '').replace(/,/g, '.').toLowerCase();
-
-/**
- * Ambil gramatur: "DUPLEX 450GSM/ 68.5CM" -> 450 ; "450 GSM" -> 450 ; "450" -> 450.
- *
- * PENTING: angka tanpa label hanya sah sebagai gramatur kalau dia SATU-SATUNYA
- * angka di teks. Kolom ukuran NPOF berisi dimensi seperti "100 x 71.5 CM", dan
- * pola lama `^\s*(\d{3,4})\b` membaca 100 sebagai gramatur — akibatnya 100
- * dibuang `parseDims()` sebagai gramatur, sehingga lebar tampil 71.5 dan
- * panjang hilang (part JRT63/JJN95, ukuran 100 x 71.5 cm).
- */
-export function parseGsm(text: string | null | undefined): number | null {
-  const s = normalizeNumText(text);
-  const labeled = s.match(/(\d{3,4})\s*(?:gsm|gr\b|gram)/);
-  if (labeled) return Number(labeled[1]);
-
-  // Angka tanpa label ("450", "450 g") hanya sah kalau dia satu-satunya angka
-  // DAN tidak langsung menempel kata lain ("180cm" bukan gramatur).
-  const numbers = s.match(/\d+(?:\.\d+)?/g) ?? [];
-  if (numbers.length !== 1) return null;
-  const value = Number(numbers[0]);
-  if (!Number.isInteger(value) || value < 100 || value > 9999) return null;
-  return /^\s*\d{3,4}\s*(?!\w)/.test(s) ? value : null;
-}
-
-/** Semua angka > 20 yang BUKAN gramatur -> dimensi cm, urutan tetap dipertahankan. */
-export function parseDims(text: string | null | undefined): number[] {
-  const s = normalizeNumText(text);
-  const gsm = parseGsm(text);
-  return [...s.matchAll(/(\d+(?:\.\d+)?)/g)]
-    .map((m) => Number(m[1]))
-    .filter((n) => n > 20 && n !== gsm);
-}
-
-/**
- * Kelipatan maksimum yang diuji saat mencari material "lebih besar N kali".
- * Contoh nyata: stok `DUPLEX 450GSM/ 117X92CM` dipakai untuk ukuran
- * `58.5 x 92 CM` karena 117 = 2 × 58.5 (satu lembar dibelah dua).
- */
-export const MAX_SIZE_MULTIPLIER = 6;
-
-export interface SizeMatch {
-  /** true = ukuran sama persis dengan kebutuhan (prioritas utama saat alokasi). */
-  exact: boolean;
-  /**
-   * Selisih lebar material - lebar kebutuhan (cm), selalu >= 0 bila lolos.
-   * Untuk ukuran kelipatan, selisih dihitung setelah lebar stok dibagi
-   * `multiplier`, sehingga 117 cm untuk kebutuhan 58.5 cm bernilai delta 0.
-   */
-  delta: number;
-  /**
-   * Berapa potong ukuran kebutuhan yang dihasilkan SATU satuan stok.
-   * `1` = ukuran sama (perilaku lama); `2` = lebar stok 2× kebutuhan, dst.
-   */
-  multiplier: number;
-}
-
-/**
- * Aturan pencocokan (keputusan user, rancangan §2.6):
- *  1. Gramatur harus sama persis
- *  2. Lebar material tidak boleh lebih kecil dari kebutuhan
- *  3. Boleh lebih besar, selisih maksimal `toleranceCm`
- *  4. Selisih 0 berarti ukuran sama persis
- *
- * TAMBAHAN (permintaan user 2026-10-13): kalau tidak ada ukuran yang pas,
- * cari ukuran yang merupakan **KELIPATAN** dari kebutuhan. Ini terjadi karena
- * pembelian sebelumnya memakai kertas yang tidak dibelah, misalnya:
- *   - kebutuhan 58.5 x 92 cm, stok berukuran 117 x 92 cm (117 = 2 × 58.5)
- * → satu lembar/gulungan stok berisi 2 potong ukuran kebutuhan, jadi jumlah
- *   stok yang berguna ikut dikalikan `multiplier` (lihat `AllocationConsumption`).
- * Kelipatan yang dicoba: 2, 3, ... sampai `maxMultiplier`.
- *
- * Untuk ukuran kelipatan, sisi LAIN (panjang) wajib sama — mesin hanya membelah
- * pada satu sumbu, jadi `117 x 92` hanya sah untuk `58.5 x 92`, bukan untuk
- * `58.5 x 70` walaupun lebarnya cocok. Stok berbentuk gulungan hanya punya satu
- * dimensi, sehingga panjangnya bebas (tidak diperiksa).
- * Pemeriksaan panjang ini SENGAJA hanya untuk ukuran kelipatan supaya perilaku
- * pencocokan lama (lebar saja, sesuai skrip validasi 29/98) tidak berubah.
- *
- * Sengaja HANYA memakai dimensi pertama (lebar) untuk aturan utama, mengikuti
- * skrip analisis yang menghasilkan angka 29 dari 98 part.
- */
-export function matchSize(
-  materialDesc: string | null | undefined,
-  needGsm: number | null,
-  needWidth: number | null,
-  toleranceCm: number,
-  needLength: number | null = null,
-  maxMultiplier = MAX_SIZE_MULTIPLIER,
-): SizeMatch | null {
-  if (needGsm === null || needWidth === null) return null;
-  const gsm = parseGsm(materialDesc);
-  if (gsm === null || gsm !== needGsm) return null;
-  const dims = parseDims(materialDesc);
-  const width = dims[0];
-  if (width === undefined) return null;
-
-  const delta = width - needWidth;
-  if (delta >= -1e-9 && delta <= toleranceCm + 1e-9) {
-    return { exact: delta < 1e-9, delta: Math.max(0, delta), multiplier: 1 };
-  }
-
-  // Sisi lain harus sama; gulungan (1 dimensi) tidak punya panjang.
-  const stockLength = dims[1];
-  if (
-    stockLength !== undefined &&
-    needLength !== null &&
-    Math.abs(stockLength - needLength) > toleranceCm + 1e-9
-  ) {
-    return null;
-  }
-
-  // Ukuran lebih besar tetapi merupakan kelipatan (mis. 117 untuk 58.5).
-  for (let multiplier = 2; multiplier <= maxMultiplier; multiplier += 1) {
-    const sliced = width / multiplier;
-    const slicedDelta = sliced - needWidth;
-    if (slicedDelta >= -1e-9 && slicedDelta <= toleranceCm + 1e-9) {
-      return { exact: false, delta: Math.max(0, slicedDelta), multiplier };
-    }
-  }
-
-  return null;
-}
+// Implementasinya dipindah ke `materialSizeMatch.ts` supaya modul rekomendasi
+// ukuran bisa memakainya tanpa impor melingkar. Di-re-export di sini agar
+// pemanggil lama (verify script, npofCoverage, route) tetap bekerja.
+export { MAX_SIZE_MULTIPLIER, NEBENG_PATTERN, matchSize, parseDims, parseGsm };
+export type { SizeMatch };
 
 // ============================================
 // Angka & teks NPOF
@@ -371,6 +236,18 @@ export interface WeeklyMatrixSummary {
   outstandingPoDetails: OutstandingPoDetail[][];
   endInd: number[];
   endIndSheet: number[];
+  /**
+   * Total waste dari stok raw material yang BENAR-BENAR terpakai grup ini (kg).
+   * INFORMASI: trim tidak mengurangi `stockAsOf`, `shortage`, maupun `endInd`.
+   * Hasil perhitungan lama belum punya field ini (undefined).
+   */
+  stockWasteKg?: number;
+  /** `stockWasteKg / stockAsOf` (0..1). */
+  stockWastePct?: number;
+  /** Total waste dari bagian Outstanding PO yang terpakai grup ini (kg). */
+  poWasteKg?: number;
+  /** `poWasteKg / (kg PO terpakai grup ini)` (0..1). */
+  poWastePct?: number;
 }
 
 export interface WeeklyMatrix {
@@ -624,6 +501,16 @@ export interface StockDetail {
    */
   excludedKg: number;
   excludedSheet: number;
+  /**
+   * Waste karena ukuran lot ini lebih besar dari ukuran grup, dihitung dari
+   * bagian yang BENAR-BENAR terpakai (`allocatedKg`). INFORMASI: angka ini
+   * tidak mengurangi alokasi/`Stock As Of`.
+   */
+  wasteKg: number;
+  /** `wasteKg / allocatedKg` (0..1). */
+  wastePct: number;
+  /** Kelebihan lebar per potong (cm). 0 = ukuran sama / tidak ada trim. */
+  trimWidthCm: number;
   /** Alasan yang ditulis user saat mengeluarkan baris ini. */
   exclusionReason?: string | null;
 }
@@ -659,42 +546,22 @@ export interface OutstandingPoDetail {
    */
   excludedKg: number;
   excludedSheet: number;
+  /**
+   * Waste karena ukuran material PO ini lebih besar dari ukuran grup, dihitung
+   * dari bagian yang BENAR-BENAR terpakai grup ini. INFORMASI: tidak mengurangi
+   * alokasi/`Outstanding PO`.
+   */
+  wasteKg: number;
+  /** `wasteKg / wasteBaseKg` (0..1). */
+  wastePct: number;
+  /** Kg material PO yang terpakai grup ini (= kg + lembar × Kg/Lbr grup). */
+  wasteBaseKg: number;
+  /** Kelebihan lebar per potong (cm). */
+  trimWidthCm: number;
   /** true = PO ini DIKELUARKAN user dari perhitungan ukuran ini. */
   excluded?: boolean;
   /** Alasan yang ditulis user saat mengeluarkan baris ini. */
   exclusionReason?: string | null;
-}
-
-/**
- * Supplier yang DATANYA TIDAK ADA. Nilai ini tidak bisa dibandingkan dengan
- * supplier mana pun, jadi pool item-nya tetap dianggap cocok — kalau tidak,
- * part tanpa data NPOF (14 baris NPOF supplier kosong, dipakai fallback jumbo
- * roll 180 cm) tidak akan pernah dapat material sama sekali walaupun materialnya
- * nyata ada di gudang.
- */
-const SUPPLIER_PLACEHOLDERS = ['', '-', 'unknown', 'n/a', 'na', 'tanpa supplier'];
-
-function hasSupplierData(value: string | null | undefined): boolean {
-  return !SUPPLIER_PLACEHOLDERS.includes(String(value || '').trim().toLowerCase());
-}
-
-/**
- * Cocokkan supplier pool dengan kebutuhan part.
- *
- * Kedua sisi dinormalisasi lewat `canonicalSupplier()` sehingga
- * "PT. MEGA SURYA ERATAMA" == "MEGA PAPER" == "MEGA", dan
- * "PHIL CORPORATION" == "HANCHANG" == "Hanchang Paper".
- *
- * Sejak 2026-10-15 `required` = true adalah DEFAULT (keputusan user: PO dan stok
- * dua-duanya wajib sesupplier, sesuai spesifikasi "Item Desc + Supplier").
- */
-function supplierOk(itemSupplier: string, needSupplier: string, required: boolean): boolean {
-  if (!required) return true;
-  if (!hasSupplierData(itemSupplier) || !hasSupplierData(needSupplier)) return true;
-  const a = canonicalSupplier(itemSupplier).trim().toLowerCase();
-  const b = canonicalSupplier(needSupplier).trim().toLowerCase();
-  if (!hasSupplierData(a) || !hasSupplierData(b)) return true;
-  return a === b || a.includes(b) || b.includes(a);
 }
 
 /**
@@ -1050,6 +917,11 @@ export interface MaterialCalcOptions {
   toleranceCm: number;
   sheetsPerRim: number;
   requireSupplierMatch: boolean;
+  /**
+   * Pengaturan fitur "Rekomendasi Ukuran Material & Waste" (bersifat INFORMASI —
+   * tidak memengaruhi angka perhitungan). Kosong = pakai default.
+   */
+  recommendation?: Partial<RecommendationOptions>;
 }
 
 export interface PartNumberDetail {
@@ -1112,6 +984,12 @@ export interface MaterialGroupResult {
   details: PartNumberDetail[];
   /** Tabel mingguan 26 kolom sesuai Gambar 3. */
   weeklyMatrix: WeeklyMatrix;
+  /**
+   * Rekomendasi ukuran material + estimasi waste. Hanya INFORMASI: angka
+   * perhitungan di atas TIDAK dipengaruhi oleh field ini.
+   * Hasil perhitungan lama belum punya field ini (undefined).
+   */
+  sizeRecommendation?: GroupSizeRecommendation;
 }
 
 export interface WeekColumn {
@@ -1732,6 +1610,12 @@ export function runMaterialCalculation(
     // Termasuk lot yang ukurannya KELIPATAN kebutuhan (mis. 117 cm untuk 58.5 cm):
     // jumlahnya dilaporkan juga dalam satuan ukuran grup (`equivalentSheet`)
     // supaya jelas berapa lembar yang benar-benar berguna.
+    // Waste dari material yang benar-benar terpakai grup ini (informasi saja).
+    let stockWasteKg = 0;
+    let poWasteKg = 0;
+    /** Kg PO yang terpakai grup ini — penyebut `poWastePct`. */
+    let poUsedKg = 0;
+
     const stockDetails: StockDetail[] = [];
     for (const item of pool) {
       if (item.source !== 'stock') continue;
@@ -1746,6 +1630,12 @@ export function runMaterialCalculation(
       const exKey = exclusionKey(g.groupKey, 'stock', ref);
       const isExcluded = exclusionSet.has(exKey);
       const excluded = excludedPartsOf(exKey, item);
+      // Kg lot yang benar-benar terpakai; bagian lembar dikonversi lewat Kg/Lbr
+      // grup supaya angka kg = lbr × Kg/Lbr, sama seperti baris `Stock As Of`.
+      const allocatedKg = (used?.kg ?? 0) + (used?.sheet ?? 0) * groupFm;
+      const ratio = sizeRatio(dims[0] ?? null, dims[1] ?? null, groupWidth, groupLength);
+      const waste = wasteOfUsage(allocatedKg, ratio, match.multiplier);
+      if (!isExcluded) stockWasteKg += waste.wasteKg;
       stockDetails.push({
         desc: item.desc,
         supplier: item.supplier,
@@ -1764,10 +1654,11 @@ export function runMaterialCalculation(
         // grup (lot gulungan) — sejalan dengan cara `stockAsOfSheet` dihitung.
         equivalentSheet:
           item.sheetRemaining * match.multiplier + (groupFm > 0 ? item.kgRemaining / groupFm : 0),
-        // Kg yang benar-benar terpakai; bagian lembar dikonversi lewat Kg/Lbr grup
-        // supaya angka kg = lbr × Kg/Lbr, sama seperti baris `Stock As Of`.
-        allocatedKg: (used?.kg ?? 0) + (used?.sheet ?? 0) * groupFm,
+        allocatedKg,
         allocatedSheet: used?.sheet ?? 0,
+        wasteKg: waste.wasteKg,
+        wastePct: waste.wastePct,
+        trimWidthCm: Math.max(0, (dims[0] ?? groupWidth ?? 0) - match.multiplier * (groupWidth ?? 0)),
       });
     }
     stockDetails.sort((a, b) => a.desc.localeCompare(b.desc));
@@ -1795,11 +1686,21 @@ export function runMaterialCalculation(
       // Item Desc + Supplier) — inilah yang membuat PO MEGA tidak lagi nongol
       // di ukuran 120 x 85.5 CM milik HANCHANG.
       if (!supplierOk(item.supplier, g.supplier, options.requireSupplierMatch)) continue;
-      if (matchSize(item.desc, gsm, groupWidth, options.toleranceCm, groupLength) === null) continue;
+      const poMatch = matchSize(item.desc, gsm, groupWidth, options.toleranceCm, groupLength);
+      if (poMatch === null) continue;
 
       const used = usedByPoolKey.get(item.key);
       const allocatedKg = used?.kg ?? 0;
       const allocatedSheet = used?.sheet ?? 0;
+      // Waste dihitung dari SELURUH bagian yang terpakai grup ini (kg + lembar),
+      // bukan hanya bagian bersatuan kg.
+      const poDims = parseDims(item.desc);
+      const poRatio = sizeRatio(poDims[0] ?? null, poDims[1] ?? null, groupWidth, groupLength);
+      const poWaste = wasteOfUsage(
+        allocatedKg + allocatedSheet * groupFm,
+        poRatio,
+        poMatch.multiplier,
+      );
       const wi = Math.min(weekCount - 1, Math.max(0, item.availableWeek));
       const ref = poolRefOf(item);
       const exKey = exclusionKey(g.groupKey, 'po', ref);
@@ -1824,12 +1725,18 @@ export function runMaterialCalculation(
         allocatedSheet,
         remainingKg: Math.max(0, qtyKg - excluded.kg - allocatedKg),
         remainingSheet: Math.max(0, qtySheet - excluded.sheet - allocatedSheet),
+        wasteKg: poWaste.wasteKg,
+        wastePct: poWaste.wastePct,
+        wasteBaseKg: allocatedKg + allocatedSheet * groupFm,
+        trimWidthCm: Math.max(0, (poDims[0] ?? groupWidth ?? 0) - poMatch.multiplier * (groupWidth ?? 0)),
         excluded: isExcluded,
         exclusionReason: isExcluded ? exclusionReasons.get(exKey) ?? null : null,
       });
 
       // PO yang dikeluarkan user TIDAK ikut baris `Outstanding PO` / `End Ind`.
       if (isExcluded) continue;
+      poWasteKg += poWaste.wasteKg;
+      poUsedKg += allocatedKg + allocatedSheet * groupFm;
 
       // Bagian milik ukuran ini saja (= qty − yang dikeluarkan sebagian).
       const keptKg = Math.max(0, qtyKg - excluded.kg);
@@ -1884,14 +1791,99 @@ export function runMaterialCalculation(
         outstandingPoDetails,
         endInd,
         endIndSheet,
+        stockWasteKg,
+        // Penyebut = material yang dipakai (produk + trim), bukan hanya produk.
+        stockWastePct: stockAsOf + stockWasteKg > 1e-9 ? stockWasteKg / (stockAsOf + stockWasteKg) : 0,
+        poWasteKg,
+        poWastePct: poUsedKg + poWasteKg > 1e-9 ? poWasteKg / (poUsedKg + poWasteKg) : 0,
       },
     };
   };
+
+  // ── Rekomendasi ukuran & waste (INFORMASI, tidak mengubah angka di atas) ──
+  // Semua data di sini hanya MEMBACA hasil alokasi: `pool` tidak dimutasi oleh
+  // `allocateSequentially` (fungsi itu bekerja pada salinan), dan `consumptions`
+  // hanya dipakai untuk menghitung sisa ketersediaan.
+  const recOptions: RecommendationOptions = {
+    toleranceCm: options.toleranceCm,
+    requireSupplierMatch: options.requireSupplierMatch,
+    maxOptions: Math.max(1, options.recommendation?.maxOptions ?? 8),
+    maxMultiplier: Math.max(1, options.recommendation?.maxMultiplier ?? MAX_SIZE_MULTIPLIER),
+    includeNpof: options.recommendation?.includeNpof ?? true,
+    standardSizes: options.recommendation?.standardSizes ?? [180],
+  };
+
+  const firstNeedWeekByPart = new Map<string, number | null>();
+  for (const part of parts) {
+    const weeks = [...part.weekDemandPcs.entries()].filter(([, qty]) => qty > 0).map(([wi]) => wi);
+    firstNeedWeekByPart.set(part.partNumber, weeks.length ? Math.min(...weeks) : null);
+  }
+
+  const npofSizeList = source.npofs
+    .map((m) => ({
+      size: normalizeNpofText(m.sheetedSize, ''),
+      gsm: parseGsm(m.gramatur),
+      supplier: canonicalSupplier(normalizeNpofText(m.supplier, 'Unknown')),
+    }))
+    .filter((s) => s.size !== '');
+
+  const recConsumptions = consumptions.map((c) => ({
+    key: c.key,
+    fromKg: c.fromKg,
+    fromSheet: c.fromSheet,
+    multiplier: c.multiplier,
+  }));
+
+  const buildRecommendationPool = (groupKey: string) =>
+    pool.map((item) => {
+      const ref = poolRefOf(item);
+      const exKey = exclusionKey(groupKey, item.source, ref);
+      const partial = partialExclusions.get(exKey);
+      return {
+        key: item.key,
+        poolRef: ref,
+        desc: item.desc,
+        supplier: item.supplier,
+        source: item.source,
+        availableWeek: item.availableWeek,
+        kgRemaining: item.kgRemaining,
+        sheetRemaining: item.sheetRemaining,
+        poNumber: item.poNumber ?? null,
+        excluded: exclusionSet.has(exKey),
+        excludedKg:
+          partial && partial.unit === 'kg'
+            ? Math.min(partial.qty, Math.max(0, item.kgRemaining))
+            : 0,
+        excludedSheet:
+          partial && partial.unit === 'sheet'
+            ? Math.min(partial.qty, Math.max(0, item.sheetRemaining))
+            : 0,
+      };
+    });
 
   const groups: MaterialGroupResult[] = [...groupMap.values()].map((g) => {
     const hasKg = g.details.some((d) => d.fm > 0);
     const surplusKg = g.isSufficient ? g.surplusKg : null;
     const groupFm = g.details.find((d) => d.fm > 0)?.fm ?? 0;
+
+    const sizeRecommendation = buildGroupRecommendation({
+      groupKey: g.groupKey,
+      ukuran: g.ukuran,
+      gramatur: g.gramatur,
+      supplier: g.supplier,
+      parts: g.details.map((d) => ({
+        partNumber: d.partNumber,
+        fm: d.fm,
+        sheetsNet2: d.sheetsNet2,
+        shortageSheet: d.shortageSheet,
+        firstNeedWeek: firstNeedWeekByPart.get(d.partNumber) ?? null,
+      })),
+      pool: buildRecommendationPool(g.groupKey),
+      consumptions: recConsumptions,
+      npofSizes: npofSizeList,
+      options: recOptions,
+    });
+
     return {
       ukuran: g.ukuran,
       gramatur: g.gramatur,
@@ -1909,6 +1901,7 @@ export function runMaterialCalculation(
       surplusSheet: hasKg && groupFm > 0 && surplusKg !== null ? surplusKg / groupFm : null,
       details: g.details,
       weeklyMatrix: buildMatrix(g),
+      sizeRecommendation,
     };
   });
 

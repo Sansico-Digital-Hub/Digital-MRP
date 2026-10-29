@@ -1,11 +1,16 @@
 import { useEffect, useState, useRef, useMemo, Fragment } from 'react';
-import { useStockRawMaterial, useUploadStockRawMaterial, useAddManualStockRawMaterial, useUpdateStockRawMaterial, useDeleteStockRawMaterial, useBulkDeleteStockRawMaterial, useImportStockRawMaterial, type StockRawMaterialData, type StockRawMaterialUploadSummary } from '../hooks/useStockRawMaterial';
+import { useStockRawMaterial, useUploadStockRawMaterial, useAddManualStockRawMaterial, useUpdateStockRawMaterial, useDeleteStockRawMaterial, useBulkDeleteStockRawMaterial, useImportStockRawMaterial, useStockUsage, type StockRawMaterialData, type StockRawMaterialUploadSummary, type StockUsageItem } from '../hooks/useStockRawMaterial';
 import { FileSpreadsheet, Plus, Upload, Loader2, Search, Pencil, Trash2, X, Check, Save, Folder, ArrowLeft, ChevronDown, ChevronRight, ChevronsDown, ChevronsUp, Lock, CalendarPlus } from 'lucide-react';
 import { usePeriods, useCreatePeriod, monthLabel, periodDisplayLabel } from '../hooks/usePeriods';
 import { PeriodSelect } from '../components/PeriodSelect';
+import { PeriodMeta } from '../components/PeriodMeta';
 import { RefBSummary, RefBValue, matchesMtl } from '../components/RefB';
+import { StockAllocationPanel } from '../components/StockAllocationPanel';
+import { StockUsageView } from '../components/StockUsageView';
 import { format } from 'date-fns';
 import { useTranslation, translate, type Lang } from '../i18n';
+import { useAuthStore } from '../stores/authStore';
+import { useNavigationStore } from '../stores/navigationStore';
 
 // Satuan yang benar-benar dipakai data.
 // CATATAN PENTING: satuan terbanyak di data adalah "sht" (199 baris), BUKAN
@@ -24,6 +29,12 @@ const isKnownUnit = (unit: string) => SHEET_UNITS.includes(unit) || RIM_UNITS.in
 
 export function StockRawMaterial() {
   const { t, lang, locale, dateLocale } = useTranslation();
+  // Halaman yang sama dibuka dari dua modul (Material Planning dan Master Data).
+  // Import / tambah / edit / hapus HANYA boleh dari Master Data; di modul
+  // Material Planning halaman ini view-only.
+  const activeModule = useNavigationStore((state) => state.activeModule);
+  const canEditDataModule = useAuthStore((state) => state.canEditDataModule);
+  const canManageData = activeModule === 'masterdata' && canEditDataModule('MATERIAL');
   // Periode upload = keranjang data. WAJIB dipilih sebelum upload/isi manual.
   const [selectedPeriodId, setSelectedPeriodId] = useState<string | null>(null);
   // Periode tujuan untuk Import / Add Manual. Ikut periode yang sedang dibuka,
@@ -94,6 +105,8 @@ export function StockRawMaterial() {
 
   const [searchTerm, setSearchTerm] = useState('');
   const [expandedItemDescs, setExpandedItemDescs] = useState<Set<string>>(new Set());
+  /** Tampilan: tabel stok (default) atau monitoring pemakaian per ukuran. */
+  const [viewMode, setViewMode] = useState<'stock' | 'usage'>('stock');
 
   const handleFileUpload = (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
@@ -309,6 +322,21 @@ export function StockRawMaterial() {
 
   const records = stockData?.data || [];
 
+  // Pemakaian per ukuran dipakai di DUA tempat: kolom ringkas pada tabel stok
+  // dan tab "Pemakaian". Satu permintaan saja, di-cache React Query per periode.
+  const { data: usageRes } = useStockUsage(selectedPeriodId);
+  const usageByKey = useMemo(() => {
+    const map = new Map<string, StockUsageItem>();
+    for (const item of usageRes?.data.items ?? []) {
+      for (const key of item.matchKeys) map.set(key, item);
+    }
+    return map;
+  }, [usageRes]);
+  const fmtKg = (value: number) =>
+    value.toLocaleString(locale, { minimumFractionDigits: 0, maximumFractionDigits: 2 });
+  /** Jumlah kolom tabel stok: 7/8 kolom lama + Terpakai, Sisa, %. */
+  const tableColCount = (canManageData ? 8 : 7) + 3;
+
   const filteredRecords = records.filter(record => 
     record.itemDesc.toLowerCase().includes(searchTerm.toLowerCase()) || 
     (record.supplier && record.supplier.toLowerCase().includes(searchTerm.toLowerCase())) ||
@@ -425,10 +453,19 @@ export function StockRawMaterial() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight">{t('stockRawMaterial.title')}</h1>
           <p className="text-sm text-muted-foreground mt-0.5">
-            {t('stockRawMaterial.subtitle')}
+            {canManageData ? t('stockRawMaterial.subtitle') : t('stockRawMaterial.subtitleViewOnly')}
           </p>
+          {!canManageData && (
+            <p className="mt-2 inline-flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-400 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-md px-2.5 py-1.5">
+              <Lock className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+              <span>
+                <strong>{t('stockRawMaterial.viewOnlyBadge')}</strong> — {t('stockRawMaterial.viewOnlyHint')}
+              </span>
+            </p>
+          )}
         </div>
         
+        {canManageData && (
         <div className="flex gap-2">
           <input type="file" ref={fileInputRef} className="hidden" accept=".xlsx, .xls, .xlsm" onChange={handleFileUpload} />
           <button
@@ -449,9 +486,10 @@ export function StockRawMaterial() {
             {t('stockRawMaterial.addManual')}
           </button>
         </div>
+        )}
       </div>
 
-      {previewData.length > 0 ? (
+      {canManageData && previewData.length > 0 ? (
         <div className="bg-card border border-primary/20 rounded-lg shadow-md overflow-hidden flex flex-col animate-in fade-in zoom-in-95 duration-200">
           <div className="p-5 border-b bg-primary/5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
             <div>
@@ -566,7 +604,7 @@ export function StockRawMaterial() {
         </div>
       ) : (
         <>
-          {isManualOpen && (
+          {canManageData && isManualOpen && (
             <div className="bg-card border rounded-lg p-5 shadow-sm animate-in slide-in-from-top-2">
               <h2 className="text-sm font-semibold mb-4">{t('stockRawMaterial.addManualTitle')}</h2>
               <form onSubmit={handleManualSubmit} className="grid grid-cols-1 md:grid-cols-6 gap-4 items-end">
@@ -622,17 +660,17 @@ export function StockRawMaterial() {
                   </p>
                 </div>
               )}
-              <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 gap-4">
                 {periods.map((p) => (
                   <div
                     key={p.id}
                     onClick={() => setSelectedPeriodId(p.id)}
-                    className="cursor-pointer p-5 border rounded-lg bg-card hover:bg-muted/50 hover:border-primary/50 transition-all flex items-center gap-4 group shadow-sm"
+                    className="cursor-pointer p-5 border rounded-lg bg-card hover:bg-muted/50 hover:border-primary/50 transition-all flex flex-wrap items-center gap-x-4 gap-y-2 group shadow-sm"
                   >
                     <div className="p-3 bg-blue-500/10 rounded-lg group-hover:bg-blue-500/20 transition-colors">
                       <Folder className="w-8 h-8 text-blue-500 fill-blue-500/20" />
                     </div>
-                    <div className="min-w-0">
+                    <div className="min-w-0 flex-1">
                       <h3 className="font-semibold text-foreground flex items-center gap-1.5">
                         <span className="truncate">{periodDisplayLabel(p, lang)}</span>
                         {p.isLocked && <Lock className="w-3.5 h-3.5 text-amber-500 shrink-0" />}
@@ -641,9 +679,11 @@ export function StockRawMaterial() {
                         {t('stockRawMaterial.periodCounts', { lots: p.counts.STOCK_RM, mrp: p.counts.MRP })}
                       </p>
                     </div>
+                    <PeriodMeta period={p} className="w-full" />
                   </div>
                 ))}
 
+                {canManageData && (
                 <div className="p-5 border-2 border-dashed rounded-lg bg-card flex flex-col gap-3 justify-center">
                   <div className="flex items-center gap-2 text-sm font-semibold text-muted-foreground">
                     <CalendarPlus className="w-4 h-4" /> {t('stockRawMaterial.createNewPeriod')}
@@ -663,6 +703,7 @@ export function StockRawMaterial() {
                     {t('components.createPeriod', { label: newPeriodMonth ? monthLabel(newPeriodMonth, lang) : t('components.periodLabel') })}
                   </button>
                 </div>
+                )}
               </div>
             </div>
           ) : (
@@ -677,60 +718,92 @@ export function StockRawMaterial() {
                   <ArrowLeft className="w-4 h-4" />
                 </button>
                 <div className="relative w-full sm:w-64">
-                  <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground w-4 h-4" />
-                  <input type="text" placeholder={t('stockRawMaterial.searchInPeriod', { period: selectedPeriod?.label ?? '' })} className="w-full pl-9 pr-4 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                  {viewMode === 'stock' && (
+                    <>
+                      <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-muted-foreground w-4 h-4" />
+                      <input type="text" placeholder={t('stockRawMaterial.searchInPeriod', { period: selectedPeriod?.label ?? '' })} className="w-full pl-9 pr-4 py-2 text-sm border rounded-md bg-background focus:outline-none focus:ring-1 focus:ring-primary" value={searchTerm} onChange={(e) => setSearchTerm(e.target.value)} />
+                    </>
+                  )}
                 </div>
-                <div className="flex items-center gap-1 bg-background border rounded-md p-0.5 text-xs text-muted-foreground">
-                  <button onClick={expandAll} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title={t('stockRawMaterial.expandAllTitle')}>
-                    <ChevronsDown className="w-3.5 h-3.5" /> {t('stockRawMaterial.expand')}
-                  </button>
-                  <span className="text-muted-foreground/30">|</span>
-                  <button onClick={collapseAll} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title={t('stockRawMaterial.collapseAllTitle')}>
-                    <ChevronsUp className="w-3.5 h-3.5" /> {t('stockRawMaterial.collapse')}
-                  </button>
-                </div>
+                {viewMode === 'stock' && (
+                  <div className="flex items-center gap-1 bg-background border rounded-md p-0.5 text-xs text-muted-foreground">
+                    <button onClick={expandAll} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title={t('stockRawMaterial.expandAllTitle')}>
+                      <ChevronsDown className="w-3.5 h-3.5" /> {t('stockRawMaterial.expand')}
+                    </button>
+                    <span className="text-muted-foreground/30">|</span>
+                    <button onClick={collapseAll} className="px-2 py-1 hover:bg-muted hover:text-foreground rounded flex items-center gap-1 transition-colors" title={t('stockRawMaterial.collapseAllTitle')}>
+                      <ChevronsUp className="w-3.5 h-3.5" /> {t('stockRawMaterial.collapse')}
+                    </button>
+                  </div>
+                )}
               </div>
               <div className="flex items-center gap-3">
-                {selectedIds.length > 0 && (
+                <div className="flex items-center gap-1 bg-background border rounded-md p-0.5 text-xs font-semibold">
+                  <button
+                    onClick={() => setViewMode('stock')}
+                    className={`px-2.5 py-1.5 rounded transition-colors ${viewMode === 'stock' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}
+                  >
+                    {t('stockRawMaterial.usage.tabStock')}
+                  </button>
+                  <button
+                    onClick={() => setViewMode('usage')}
+                    className={`px-2.5 py-1.5 rounded transition-colors ${viewMode === 'usage' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}
+                  >
+                    {t('stockRawMaterial.usage.tabUsage')}
+                  </button>
+                </div>
+                {canManageData && selectedIds.length > 0 && (
                   <button onClick={handleBulkDelete} disabled={bulkDeleteMutation.isPending} className="flex items-center gap-2 px-3 py-1.5 bg-destructive text-destructive-foreground hover:bg-destructive/90 rounded-md font-medium text-sm animate-in fade-in">
                     {bulkDeleteMutation.isPending ? <Loader2 className="w-4 h-4 animate-spin" /> : <Trash2 className="w-4 h-4" />} {t('stockRawMaterial.deleteCount', { count: selectedIds.length })}
                   </button>
                 )}
-                <div className="text-sm font-medium text-muted-foreground bg-background px-3 py-1.5 border rounded-md flex items-center gap-2">
-                  <span>{t('stockRawMaterial.itemsCount', { count: groupedByItem.length })}</span>
-                  <span className="text-muted-foreground/40">•</span>
-                  <span>{t('stockRawMaterial.lotsCount', { count: filteredRecords.length })}</span>
-                </div>
+                {viewMode === 'stock' && (
+                  <div className="text-sm font-medium text-muted-foreground bg-background px-3 py-1.5 border rounded-md flex items-center gap-2">
+                    <span>{t('stockRawMaterial.itemsCount', { count: groupedByItem.length })}</span>
+                    <span className="text-muted-foreground/40">•</span>
+                    <span>{t('stockRawMaterial.lotsCount', { count: filteredRecords.length })}</span>
+                  </div>
+                )}
               </div>
             </div>
 
+            {viewMode === 'usage' ? (
+              <div className="p-4">
+                <StockUsageView periodId={selectedPeriodId} />
+              </div>
+            ) : (
             <div className="overflow-x-auto">
               <table className="w-full text-sm text-left">
                 <thead className="text-xs text-muted-foreground uppercase bg-secondary/50">
                   <tr>
-                    <th className="px-4 py-4 w-12 text-center">
-                      <input type="checkbox" className="rounded border-gray-300 w-4 h-4" checked={filteredRecords.length > 0 && selectedIds.length === filteredRecords.length} onChange={handleSelectAll} />
-                    </th>
+                    {canManageData && (
+                      <th className="px-4 py-4 w-12 text-center">
+                        <input type="checkbox" className="rounded border-gray-300 w-4 h-4" checked={filteredRecords.length > 0 && selectedIds.length === filteredRecords.length} onChange={handleSelectAll} />
+                      </th>
+                    )}
                     <th className="px-6 py-4 font-semibold">{t('stockRawMaterial.itemDesc')}</th>
                     <th className="px-6 py-4 font-semibold">{t('stockRawMaterial.refB')}</th>
                     <th className="px-6 py-4 font-semibold">{t('stockRawMaterial.supplier')}</th>
                     <th className="px-6 py-4 font-semibold">{t('common.date')}</th>
                     <th className="px-6 py-4 font-semibold text-right">{t('stockRawMaterial.qty')}</th>
                     <th className="px-6 py-4 font-semibold text-center">{t('stockRawMaterial.unit')}</th>
+                    <th className="px-6 py-4 font-semibold text-right">{t('stockRawMaterial.usage.colUsed')}</th>
+                    <th className="px-6 py-4 font-semibold text-right">{t('stockRawMaterial.usage.colRemaining')}</th>
+                    <th className="px-6 py-4 font-semibold text-right">{t('stockRawMaterial.usage.colPct')}</th>
                     <th className="px-6 py-4 font-semibold text-right">{t('common.action')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y">
                   {isLoading ? (
                     <tr>
-                      <td colSpan={8} className="px-6 py-12 text-center text-muted-foreground">
+                      <td colSpan={tableColCount} className="px-6 py-12 text-center text-muted-foreground">
                         <Loader2 className="w-8 h-8 animate-spin mx-auto text-primary" />
                         <p className="mt-2 text-sm font-medium">{t('common.loading')}</p>
                       </td>
                     </tr>
                   ) : groupedByItem.length === 0 ? (
                     <tr>
-                      <td colSpan={8} className="px-6 py-12 text-center text-muted-foreground">
+                      <td colSpan={tableColCount} className="px-6 py-12 text-center text-muted-foreground">
                         <FileSpreadsheet className="w-12 h-12 mx-auto text-muted-foreground/30 mb-3" />
                         <p className="text-base font-semibold">{t('stockRawMaterial.emptyData')}</p>
                       </td>
@@ -741,22 +814,27 @@ export function StockRawMaterial() {
                       const groupIds = group.items.map(i => i.id);
                       const isGroupAllSelected = groupIds.length > 0 && groupIds.every(id => selectedIds.includes(id));
                       const isGroupSomeSelected = groupIds.some(id => selectedIds.includes(id)) && !isGroupAllSelected;
+                      // Pemakaian dicocokkan lewat `matchKeys` (supplier mentah ->
+                      // supplier kanonik), jadi variasi tulisan supplier tetap kena.
+                      const usage = usageByKey.get(group.key);
 
                       return (
                         <Fragment key={group.key}>
                           {/* Parent Group Row */}
                           <tr className="hover:bg-muted/40 transition-colors bg-card font-medium border-b">
-                            <td className="px-4 py-3.5 text-center">
-                              <input
-                                type="checkbox"
-                                className="rounded border-gray-300 w-4 h-4"
-                                checked={isGroupAllSelected}
-                                ref={(el) => {
-                                  if (el) el.indeterminate = isGroupSomeSelected;
-                                }}
-                                onChange={() => handleToggleGroupSelect(group.items)}
-                              />
-                            </td>
+                            {canManageData && (
+                              <td className="px-4 py-3.5 text-center">
+                                <input
+                                  type="checkbox"
+                                  className="rounded border-gray-300 w-4 h-4"
+                                  checked={isGroupAllSelected}
+                                  ref={(el) => {
+                                    if (el) el.indeterminate = isGroupSomeSelected;
+                                  }}
+                                  onChange={() => handleToggleGroupSelect(group.items)}
+                                />
+                              </td>
+                            )}
                             <td className="px-6 py-3.5">
                               <div className="flex items-center gap-2">
                                 <button
@@ -824,6 +902,51 @@ export function StockRawMaterial() {
                               </div>
                             </td>
                             <td className="px-6 py-3.5 text-right">
+                              {usage ? (
+                                <>
+                                  <div className="font-semibold text-blue-700 text-sm">{fmtKg(usage.usedKg)} kg</div>
+                                  {usage.usedSheet > 0 && (
+                                    <div className="text-[10px] font-normal text-muted-foreground">
+                                      {fmtKg(usage.usedSheet)} {t('unit.sheets')}
+                                    </div>
+                                  )}
+                                </>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
+                            </td>
+                            <td className="px-6 py-3.5 text-right">
+                              {usage ? (
+                                <>
+                                  <div className="font-semibold text-foreground text-sm">{fmtKg(usage.remainingKg)} kg</div>
+                                  {usage.totalSheet > 0 && (
+                                    <div className="text-[10px] font-normal text-muted-foreground">
+                                      {fmtKg(usage.remainingSheet)} {t('unit.sheets')}
+                                    </div>
+                                  )}
+                                </>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
+                            </td>
+                            <td className="px-6 py-3.5 text-right">
+                              {usage && usage.usedPct !== null ? (
+                                <div className="flex items-center justify-end gap-2">
+                                  <div className="h-1.5 w-14 rounded-full bg-secondary overflow-hidden">
+                                    <div
+                                      className="h-full rounded-full bg-blue-500"
+                                      style={{ width: `${Math.min(100, Math.max(0, usage.usedPct * 100))}%` }}
+                                    />
+                                  </div>
+                                  <span className="text-xs font-semibold text-foreground">
+                                    {(usage.usedPct * 100).toFixed(1)}%
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-xs text-muted-foreground">—</span>
+                              )}
+                            </td>
+                            <td className="px-6 py-3.5 text-right">
                               <button
                                 onClick={() => toggleExpand(group.key)}
                                 className="text-xs text-primary hover:text-primary/80 font-medium inline-flex items-center gap-1 p-1 hover:bg-primary/10 rounded transition-colors"
@@ -841,14 +964,16 @@ export function StockRawMaterial() {
                                 key={record.id}
                                 className="bg-muted/20 hover:bg-muted/35 transition-colors border-l-4 border-l-primary/60"
                               >
-                                <td className="px-4 py-2.5 text-center">
-                                  <input
-                                    type="checkbox"
-                                    className="rounded border-gray-300 w-4 h-4"
-                                    checked={selectedIds.includes(record.id)}
-                                    onChange={(e) => handleSelectOne(e, record.id)}
-                                  />
-                                </td>
+                                {canManageData && (
+                                  <td className="px-4 py-2.5 text-center">
+                                    <input
+                                      type="checkbox"
+                                      className="rounded border-gray-300 w-4 h-4"
+                                      checked={selectedIds.includes(record.id)}
+                                      onChange={(e) => handleSelectOne(e, record.id)}
+                                    />
+                                  </td>
+                                )}
                                 {editingId === record.id ? (
                                   <>
                                     <td className="px-6 py-2.5">
@@ -901,6 +1026,7 @@ export function StockRawMaterial() {
                                         onChange={(e) => setEditForm({ ...editForm, unit: e.target.value })}
                                       />
                                     </td>
+                                    <td colSpan={3} />
                                     <td className="px-6 py-2.5 text-right">
                                       <div className="flex items-center justify-end gap-1.5">
                                         <button
@@ -940,7 +1066,9 @@ export function StockRawMaterial() {
                                         {record.unit}
                                       </span>
                                     </td>
+                                    <td colSpan={3} />
                                     <td className="px-6 py-2.5 text-right">
+                                      {canManageData && (
                                       <div className="flex items-center justify-end gap-1">
                                         <button
                                           onClick={() => handleEditClick(record)}
@@ -962,18 +1090,30 @@ export function StockRawMaterial() {
                                           )}
                                         </button>
                                       </div>
+                                      )}
                                     </td>
                                   </>
                                 )}
                               </tr>
                             ))}
-                        </Fragment>
+                          {isExpanded && selectedPeriodId && (
+                            <tr className="bg-primary/5">
+                              <td colSpan={tableColCount} className="px-6 py-3">
+                                <StockAllocationPanel
+                                  periodId={selectedPeriodId}
+                                  itemDesc={group.itemDesc}
+                                  supplier={group.suppliers.split(', ')[0] || null}
+                                />
+                              </td>
+                            </tr>
+                          )}                        </Fragment>
                       );
                     })
                   )}
                 </tbody>
               </table>
             </div>
+            )}
             </div>
           )}
         </>

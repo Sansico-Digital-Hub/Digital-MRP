@@ -84,6 +84,15 @@ export interface StockDetail {
   excludedSheet: number;
   /** Identitas pool item (= `MaterialCalcExclusion.poolRef`). */
   poolRef: string;
+  /**
+   * Waste karena ukuran lot ini lebih besar dari ukuran grup, dihitung dari
+   * bagian yang benar-benar terpakai. INFORMASI (tidak mengurangi alokasi).
+   * Hasil perhitungan lama belum punya field ini.
+   */
+  wasteKg?: number;
+  wastePct?: number;
+  /** Kelebihan lebar per potong (cm). */
+  trimWidthCm?: number;
   /** true = baris ini dikeluarkan user dari perhitungan ukuran ini. */
   excluded?: boolean;
   exclusionReason?: string | null;
@@ -111,6 +120,13 @@ export interface OutstandingPoDetail {
    */
   excludedKg: number;
   excludedSheet: number;
+  /** Waste dari bagian PO yang terpakai grup ini. INFORMASI saja. */
+  wasteKg?: number;
+  wastePct?: number;
+  /** Kg material PO yang terpakai grup ini (penyebut persentase). */
+  wasteBaseKg?: number;
+  /** Kelebihan lebar per potong (cm). */
+  trimWidthCm?: number;
   /** true = PO ini dikeluarkan user dari perhitungan ukuran ini. */
   excluded?: boolean;
   exclusionReason?: string | null;
@@ -140,12 +156,87 @@ export interface WeeklyMatrixSummary {
   outstandingPoDetails?: OutstandingPoDetail[][];
   endInd: number[];
   endIndSheet: number[];
+  /** Total waste dari stok yang benar-benar terpakai grup ini (kg). INFORMASI. */
+  stockWasteKg?: number;
+  stockWastePct?: number;
+  /** Total waste dari bagian PO yang terpakai grup ini (kg). INFORMASI. */
+  poWasteKg?: number;
+  poWastePct?: number;
 }
 
 export interface WeeklyMatrix {
   columns: WeeklyMatrixColumn[];
   rows: WeeklyMatrixRow[];
   summary: WeeklyMatrixSummary;
+}
+
+/** Asal ukuran yang direkomendasikan (`need` = ukuran pas sebagai pembanding). */
+export type RecommendationSource = 'stock' | 'po' | 'npof' | 'standard' | 'need';
+
+/** Bentuk material: gulungan (1 dimensi) atau lembaran (2 dimensi). */
+export type RecommendationForm = 'roll' | 'sheet';
+
+export type RecommendationNote =
+  | 'trim-not-applied'
+  | 'arrives-late'
+  | 'new-purchase'
+  | 'no-quantity'
+  | 'size-multiplied'
+  | 'baseline';
+
+/** Satu perhitungan waste (dipakai untuk pembelian & produksi). */
+export interface WasteBasis {
+  qtySheet: number;
+  stockUnits: number;
+  kgMaterial: number;
+  kgUsed: number;
+  trimWasteKg: number;
+  roundingWasteKg: number;
+  wasteKg: number;
+  /** 0..1 */
+  wastePct: number;
+}
+
+export interface SizeRecommendation {
+  size: string;
+  width: number | null;
+  length: number | null;
+  form: RecommendationForm;
+  source: RecommendationSource;
+  supplier: string;
+  sourceRefs: string[];
+  /** 1 = ukuran sama; 2..N = ukuran kelipatan (dipotong N lane). */
+  multiplier: number;
+  trimWidthCm: number;
+  trimLengthCm: number;
+  wasteAreaCm2: number;
+  wastePerSheetKg: number;
+  /** 0..1 */
+  wastePctPerSheet: number;
+  /** Waste atas kekurangan yang perlu dibeli. */
+  purchase: WasteBasis;
+  /** Waste atas seluruh kebutuhan produksi bersih. */
+  production: WasteBasis;
+  availableKg: number;
+  availableSheet: number;
+  availableNow: boolean;
+  arrivalWeek: number | null;
+  feasible: boolean;
+  notes: RecommendationNote[];
+}
+
+export interface GroupSizeRecommendation {
+  groupKey: string;
+  needWidth: number | null;
+  needLength: number | null;
+  needGsm: number | null;
+  purchaseQtySheet: number;
+  productionQtySheet: number;
+  best: SizeRecommendation | null;
+  /** Ukuran pas (waste 0%) sebagai pembanding. */
+  baseline: SizeRecommendation | null;
+  options: SizeRecommendation[];
+  emptyReason?: 'nebeng' | 'no-dimension' | 'no-gsm' | 'no-quantity' | 'no-candidate';
 }
 
 export interface MaterialGroup {
@@ -174,6 +265,11 @@ export interface MaterialGroup {
   details: PartNumberDetail[];
   /** Tabel mingguan 26 kolom. */
   weeklyMatrix: WeeklyMatrix;
+  /**
+   * Rekomendasi ukuran + estimasi waste (INFORMASI — tidak memengaruhi angka
+   * perhitungan). Hasil perhitungan lama belum punya field ini.
+   */
+  sizeRecommendation?: GroupSizeRecommendation;
 }
 
 export interface MaterialCalcWeek {

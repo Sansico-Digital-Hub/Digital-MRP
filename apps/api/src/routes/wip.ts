@@ -88,7 +88,7 @@ export default async function wipRoutes(server: FastifyInstance) {
         },
       });
 
-      await touchPeriod(periodId);
+      await touchPeriod(periodId, request.user!.id);
       // Audit Log
       await prisma.auditLog.create({
         data: {
@@ -284,7 +284,7 @@ export default async function wipRoutes(server: FastifyInstance) {
         },
       });
 
-      await touchPeriod(existingWip.periodId);
+      await touchPeriod(existingWip.periodId, request.user!.id);
       return reply.send({ data: updatedWip });
     }
   );
@@ -316,7 +316,7 @@ export default async function wipRoutes(server: FastifyInstance) {
         where: { id: { in: ids } },
       });
 
-      for (const periodId of periodIds) await touchPeriod(periodId);
+      for (const periodId of periodIds) await touchPeriod(periodId, request.user!.id);
 
       await prisma.auditLog.create({
         data: {
@@ -351,7 +351,7 @@ export default async function wipRoutes(server: FastifyInstance) {
 
       await prisma.wIP.delete({ where: { id } });
 
-      await touchPeriod(existingWip.periodId);
+      await touchPeriod(existingWip.periodId, request.user!.id);
 
       await prisma.auditLog.create({
         data: {

@@ -36,6 +36,22 @@ export interface WeeklyScheduleSummaryResponse {
   weeks?: WeeklyScheduleWeekColumn[];
   /** Tanggal mulai W1 (ISO). null bila periode belum punya data MRP. */
   periodStart?: string | null;
+  /** Versi snapshot yang menjadi sumber data aktif (null bila belum ada versi). */
+  activeVersion?: {
+    id: string;
+    versionNumber: number;
+    uploadedAt: string;
+    uploadedByName: string | null;
+    fileName: string | null;
+    itemCount: number;
+    totalQty: number;
+  } | null;
+  /** Perubahan terakhir pada data aktif (upload / edit manual / rollback). */
+  lastChange?: {
+    at: string;
+    byName: string | null;
+    kind: 'UPLOAD' | 'EDIT' | 'ROLLBACK' | null;
+  } | null;
 }
 
 /**

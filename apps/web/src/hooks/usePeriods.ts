@@ -37,6 +37,14 @@ export interface PeriodSummary {
   counts: Record<PeriodSourceKey, number>;
   /** Jumlah baris MRP & WIP terpisah per modul (dipakai halaman Master Data). */
   moduleCounts: Record<DataModule, { MRP: number; WIP: number }>;
+  /** Upload terakhir periode ini (dari `cycle_source_uploads`). */
+  lastUploadAt: string | null;
+  lastUploadByName: string | null;
+  lastUploadSource: PeriodSourceKey | null;
+  lastUploadFileName: string | null;
+  /** Edit manual terakhir (ubah/hapus baris) — null bila belum pernah diedit. */
+  lastEditedAt: string | null;
+  lastEditedByName: string | null;
 }
 
 export const PERIOD_QUERY_KEY = ['periods'];

@@ -20,7 +20,9 @@ Panduan lengkap untuk database schema PDITS.
 | **users** | Authentication & roles | Permanent | Standard CRUD |
 | **items** | Master data produk | Permanent | Standard CRUD |
 | **daily_schedules** | Permintaan harian | Historical | Unique: date+shift+item |
-| **weekly_schedules** | Permintaan mingguan | Historical | Unique: year+week+item |
+| **weekly_schedules** | Permintaan mingguan (data AKTIF per periode + modul) | Historical | Unique: period+module+year+week+item |
+| **mrp_versions** | Snapshot setiap upload MRP (versi per periode + modul) | Append-only | Unique: period+module+versionNumber; satu `isCurrent` |
+| **mrp_version_rows** | Detail part x minggu milik satu snapshot | Append-only | FK ke mrp_versions (cascade) |
 | **fg_stocks** | Stok Finish Good | **Snapshot (Overwrite)** | Unique: itemId |
 | **wips** | Work in Progress | **Snapshot (Overwrite)** | Unique: itemId+location |
 | **audit_logs** | Audit trail | Append-only | Never updated |
@@ -247,6 +249,7 @@ quantity: 1000
 - ✅ Historical data (tidak overwrite)
 - ✅ Unique per year + week + item
 - ✅ Week 1-26 only
+- ⚠️ Sejak fitur riwayat MRP (2026-10-26) baris di tabel ini = **data AKTIF** untuk satu `periodId` + `moduleType`. Setiap upload Excel menulis ulang baris periode+modul ini **dan** menyimpan snapshot ke `mrp_versions` / `mrp_version_rows`. Edit manual di tabel ini tidak mengubah snapshot.
 
 ---
 
@@ -610,6 +613,40 @@ docker exec -i pdits-mysql-dev mysql -u pdits -pdevpassword pdits_dev < backup.s
 # Reset database (⚠️ DELETES ALL DATA!)
 pnpm --filter @pdits/api prisma migrate reset
 ```
+
+---
+
+## 🧾 Riwayat Upload MRP (Versioning Mingguan)
+
+MRP diupload berkala (biasanya sekali seminggu). Tombol **Save Overwrite** tidak
+lagi menghapus riwayat: setiap upload disimpan sebagai snapshot versi baru, dan
+hanya versi terbaru yang menjadi data aktif.
+
+| Table | Isi |
+|-------|-----|
+| `mrp_versions` | Satu baris per upload: `periodId`, `moduleType`, `versionNumber`, `isCurrent`, `source` (`UPLOAD`/`BACKFILL`), `fileName`, `uploadedAt`, `uploadedBy`, `uploadedByName`, `itemCount`, `rowCount`, `totalQty`, `weekStartDate`, `weekCount`, `clientRequestId` |
+| `mrp_version_rows` | Detail `partNumber`, `description`, `weekNumber`, `weekStartDate`, `weekEndDate`, `quantity` per snapshot |
+
+**Aturan penting:**
+
+- Nomor versi berurutan per (`periodId`, `moduleType`) mulai dari 1.
+- Tepat satu versi `isCurrent` per periode+modul. MySQL tidak punya partial unique
+  index, jadi dijaga kolom `currentKey` = `"<periodId>:<moduleType>"` (unique,
+  NULL untuk versi non-aktif).
+- `clientRequestId` (unique) membuat penyimpanan idempoten: double-click / retry
+  tidak membuat versi ganda.
+- Perbandingan antar versi mencocokkan minggu berdasarkan **tanggal awal minggu**,
+  bukan nomor W1–W26, karena rentang tanggal bergeser antar upload.
+- Menghapus versi aktif (**khusus Super Admin**) = **rollback**: data aktif
+  (`weekly_schedules`) dihapus lalu diisi ulang dari versi sebelumnya; bila tidak
+  ada versi tersisa, data aktif periode itu dikosongkan. Jejak pelaku disimpan di
+  `planning_cycles.lastDataChangeBy/lastDataChangeKind` (`UPLOAD`/`EDIT`/`ROLLBACK`).
+- Data lama di-backfill migrasi `20261026000000_mrp_versions` sebagai versi ke-1
+  dengan `source = BACKFILL`.
+
+**Endpoint:** `GET/POST /api/v1/mrp-versions`, `POST /api/v1/mrp-versions/preview`,
+`GET /api/v1/mrp-versions/:id`, `GET /api/v1/mrp-versions/:id/compare`,
+`GET /api/v1/mrp-versions/trend`.
 
 ---
 

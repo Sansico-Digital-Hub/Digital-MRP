@@ -29,6 +29,64 @@ async function refreshMrpRangeFor(periodId: string, moduleType: string | null | 
   });
 }
 
+/**
+ * Info versi aktif + perubahan data aktif terakhir, untuk strip info di tab
+ * "Data Aktif". Sumbernya `mrp_versions` (versi aktif) dan jejak di
+ * `planning_cycles` (kapan & siapa yang terakhir mengubah data aktif).
+ */
+async function loadActiveDataInfo(periodId: string, moduleType: 'PRODUCTION' | 'MATERIAL') {
+  const [version, cycle] = await Promise.all([
+    prisma.mrpVersion.findFirst({
+      where: { periodId, moduleType, isCurrent: true },
+      select: {
+        id: true,
+        versionNumber: true,
+        uploadedAt: true,
+        uploadedByName: true,
+        fileName: true,
+        itemCount: true,
+        totalQty: true,
+      },
+    }),
+    prisma.planningCycle.findUnique({
+      where: { id: periodId },
+      select: { lastDataChangeAt: true, lastDataChangeBy: true, lastDataChangeKind: true },
+    }),
+  ]);
+
+  const userIds = [cycle?.lastDataChangeBy].filter((id): id is string => Boolean(id));
+  const users = userIds.length
+    ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true } })
+    : [];
+  const nameById = new Map(users.map((user) => [user.id, user.name]));
+
+  return {
+    activeVersion: version
+      ? {
+          id: version.id,
+          versionNumber: version.versionNumber,
+          uploadedAt: version.uploadedAt,
+          uploadedByName: version.uploadedByName,
+          fileName: version.fileName,
+          itemCount: version.itemCount,
+          totalQty: version.totalQty,
+        }
+      : null,
+    lastChange: cycle?.lastDataChangeAt
+      ? {
+          at: cycle.lastDataChangeAt,
+          // Periode lama belum punya `lastDataChangeBy/Kind` (kolom baru) → pakai
+          // data upload versi aktif sebagai perkiraan terbaik.
+          byName:
+            (cycle.lastDataChangeBy ? nameById.get(cycle.lastDataChangeBy) : null) ??
+            version?.uploadedByName ??
+            null,
+          kind: cycle.lastDataChangeKind ?? (version ? 'UPLOAD' : null),
+        }
+      : null,
+  };
+}
+
 export default async function weeklyScheduleRoutes(server: FastifyInstance) {
   // GET /api/v1/weekly-schedule — bisa difilter per periode + modul:
   //   ?periodId=...&moduleType=PRODUCTION|MATERIAL
@@ -74,6 +132,8 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
     }
     const module = resolveModuleType(moduleType);
 
+    const activeInfo = await loadActiveDataInfo(periodId, module);
+
     const schedules = await prisma.weeklySchedule.findMany({
       where: { periodId, moduleType: module },
       include: { item: true },
@@ -87,6 +147,7 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
         moduleType: module,
         weeks: [],
         periodStart: null,
+        ...activeInfo,
       });
     }
 
@@ -154,6 +215,7 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
       moduleType: module,
       weeks,
       periodStart: weeks[0].weekStartDate,
+      ...activeInfo,
     });
   });
 
@@ -240,7 +302,7 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
         },
       });
 
-      await touchPeriod(periodId);
+      await touchPeriod(periodId, request.user!.id);
       await refreshMrpRangeFor(periodId, moduleType);
 
       await prisma.auditLog.create({
@@ -505,7 +567,7 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
         },
       });
 
-      await touchPeriod(existing.periodId);
+      await touchPeriod(existing.periodId, request.user!.id);
       await refreshMrpRangeFor(existing.periodId, existing.moduleType);
       return reply.send({ data: schedule });
     }
@@ -538,7 +600,7 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
         where: { id: { in: ids } },
       });
 
-      for (const periodId of periodIds) await touchPeriod(periodId);
+      for (const periodId of periodIds) await touchPeriod(periodId, request.user!.id);
       for (const periodId of periodIds) {
         const mod = affected.find((s) => s.periodId === periodId)?.moduleType;
         await refreshMrpRangeFor(periodId, mod);
@@ -573,7 +635,7 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
         return reply.code(403).send({ error: 'Forbidden', message: forbiddenModuleMessage(request.user?.role) });
       }
       await prisma.weeklySchedule.delete({ where: { id } });
-      await touchPeriod(existing.periodId);
+      await touchPeriod(existing.periodId, request.user!.id);
       await refreshMrpRangeFor(existing.periodId, existing.moduleType);
       return reply.send({ message: 'Deleted successfully' });
     }

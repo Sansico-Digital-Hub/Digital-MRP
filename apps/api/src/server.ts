@@ -19,6 +19,7 @@ import outstandingPoRoutes from './routes/outstandingPo';
 import npofMaterialsRoutes from './routes/npofMaterials';
 import materialCalcRoutes from './routes/materialCalc';
 import materialPlanningRoutes from './routes/materialPlanning';
+import mrpVersionRoutes from './routes/mrpVersions';
 import historyRoutes from './routes/history';
 import fgStockHistoryRoutes from './routes/fgStockHistory';
 import { startCleanupSchedule, stopCleanupSchedule } from './lib/cleanup';
@@ -80,6 +81,7 @@ async function registerPlugins() {
   await server.register(trackingRoutes);
   await server.register(usersRoutes);
   await server.register(weeklyScheduleRoutes);
+  await server.register(mrpVersionRoutes);
   await server.register(hotlistRoutes);
   await server.register(stockRawMaterialRoutes);
   await server.register(outstandingPoRoutes);

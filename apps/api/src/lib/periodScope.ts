@@ -192,11 +192,20 @@ export async function requireWritablePeriod(
  * Tandai periode berubah (dipakai edit/hapus manual). WAJIB dipanggil setiap ada
  * perubahan data periode, supaya hasil perhitungan yang lama ditandai "perlu
  * dihitung ulang" (STALE).
+ *
+ * `userId` = pelaku perubahan, dipakai folder periode untuk menampilkan
+ * "edit terakhir oleh siapa". Upload TIDAK lewat sini (lihat recordPeriodChange).
  */
-export async function touchPeriod(periodId: string) {
+export async function touchPeriod(periodId: string, userId?: string) {
+  const now = new Date();
   await prisma.planningCycle.update({
     where: { id: periodId },
-    data: { lastDataChangeAt: new Date() },
+    data: {
+      lastDataChangeAt: now,
+      lastDataChangeKind: 'EDIT',
+      lastEditedAt: now,
+      ...(userId ? { lastEditedBy: userId, lastDataChangeBy: userId } : {}),
+    },
   });
 }
 
@@ -376,6 +385,8 @@ export async function recordPeriodChange(params: {
     data: {
       lastUploadedAt: now,
       lastDataChangeAt: now,
+      lastDataChangeBy: params.userId,
+      lastDataChangeKind: 'UPLOAD',
       ...(mrpRange ? { mrpStartDate: mrpRange.start, mrpEndDate: mrpRange.end } : {}),
     },
   });

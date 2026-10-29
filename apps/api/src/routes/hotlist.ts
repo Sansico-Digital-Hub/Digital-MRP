@@ -253,7 +253,7 @@ export default async function hotlistRoutes(server: FastifyInstance) {
       });
     }
 
-    await touchPeriod(periodId);
+    await touchPeriod(periodId, request.user!.id);
     return reply.code(201).send({ data: result });
   });
 
@@ -276,7 +276,7 @@ export default async function hotlistRoutes(server: FastifyInstance) {
       },
     });
 
-    await touchPeriod(existingHotlist.periodId);
+    await touchPeriod(existingHotlist.periodId, request.user!.id);
     return reply.send({ data: updatedHotlist });
   });
 
@@ -291,7 +291,7 @@ export default async function hotlistRoutes(server: FastifyInstance) {
 
     await prisma.hotlist.delete({ where: { id } });
 
-    await touchPeriod(existingHotlist.periodId);
+    await touchPeriod(existingHotlist.periodId, request.user!.id);
     return reply.send({ message: 'Hotlist record deleted successfully' });
   });
 
@@ -316,7 +316,7 @@ export default async function hotlistRoutes(server: FastifyInstance) {
         },
       });
 
-      for (const pid of [...new Set(affected.map((r) => r.periodId))]) await touchPeriod(pid);
+      for (const pid of [...new Set(affected.map((r) => r.periodId))]) await touchPeriod(pid, request.user!.id);
 
       return reply.send({ message: `Successfully deleted ${result.count} records.`, count: result.count });
     } catch (error) {
