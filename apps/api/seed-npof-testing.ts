@@ -72,7 +72,6 @@ interface BackupRow {
   sheetedSize: string | null;
   formulaMaterial: string | null;
   ups: string | null;
-  isEdited: boolean;
   lastSyncedAt: string | null;
 }
 
@@ -89,7 +88,6 @@ function toBackupRow(row: Record<string, unknown>): BackupRow {
     sheetedSize: (row.sheetedSize ?? null) as string | null,
     formulaMaterial: (row.formulaMaterial ?? null) as string | null,
     ups: (row.ups ?? null) as string | null,
-    isEdited: Boolean(row.isEdited),
     lastSyncedAt: date ? new Date(date).toISOString() : null,
   };
 }
@@ -186,7 +184,9 @@ const prisma = new PrismaClient({
 function buildData() {
   return ROWS.map(([partNumber, productName, material, gramatur, supplier, width, length, ups, fm], i) => ({
     npofId: NPOF_ID_MIN + i,
+    plantId: 2,
     partNumber,
+    partNumberNorm: partNumber.trim().replace(/\s+/g, ' ').toUpperCase(),
     productName,
     material,
     gramatur,
@@ -194,6 +194,13 @@ function buildData() {
     sheetedSize: `${width} x ${length} CM`,
     formulaMaterial: String(fm),
     ups: String(ups),
+    upsOriginal: ups,
+    upsCombined: ups,
+    upsCounted: true,
+    isApproved: true,
+    statusLabel: 'Completed',
+    scenario: 'main',
+    isActive: true,
   }));
 }
 
@@ -385,7 +392,6 @@ async function remove() {
           sheetedSize: r.sheetedSize,
           formulaMaterial: r.formulaMaterial,
           ups: r.ups,
-          isEdited: r.isEdited,
           lastSyncedAt: r.lastSyncedAt ? new Date(r.lastSyncedAt) : null,
         },
       });

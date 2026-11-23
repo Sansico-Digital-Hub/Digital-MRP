@@ -74,6 +74,29 @@ const corsOrigins = (process.env.CORS_ORIGIN || 'http://localhost:5173')
   .map((origin) => origin.trim().replace(/\/+$/, ''))
   .filter((origin) => origin !== '');
 
+/**
+ * Daftar plant SNF yang boleh dibaca, dipisah koma (mis. "2" atau "2,1,3").
+ * Nilai yang tidak valid dibuang; bila kosong dipakai default [2] (PP2).
+ */
+function parsePlantIds(raw: string | undefined, fallback: number[]): number[] {
+  const parsed = (raw || '')
+    .split(',')
+    .map((value) => Number.parseInt(value.trim(), 10))
+    .filter((value) => Number.isInteger(value) && value > 0);
+  return parsed.length > 0 ? [...new Set(parsed)] : fallback;
+}
+
+const snfAllowedPlantIds = parsePlantIds(process.env.SNF_ALLOWED_PLANT_IDS, [2]);
+const snfDefaultPlantId =
+  Number.parseInt(process.env.SNF_DEFAULT_PLANT_ID || '', 10) || snfAllowedPlantIds[0];
+
+if (!snfAllowedPlantIds.includes(snfDefaultPlantId)) {
+  throw new Error(
+    `SNF_DEFAULT_PLANT_ID (${snfDefaultPlantId}) harus termasuk dalam SNF_ALLOWED_PLANT_IDS ` +
+      `(${snfAllowedPlantIds.join(',')}).`
+  );
+}
+
 export const config = {
   // Server
   port: parseInt(process.env.PORT || '3001', 10),
@@ -120,10 +143,22 @@ export const config = {
     items: 1800, // 30 minutes
   },
 
-  // NPOF External API
-  npofApi: {
-    url: process.env.NPOF_API_URL || 'http://127.0.0.1:8008',
-    key: process.env.NPOF_API_KEY || '',
+  // Integrasi SNF (sumber data NPOF). Read-only: jangan pernah menulis ke SNF.
+  // NPOF_API_URL / NPOF_API_KEY tetap dibaca sebagai fallback nama lama.
+  snf: {
+    baseUrl: (process.env.SNF_BASE_URL || process.env.NPOF_API_URL || 'http://127.0.0.1:8008').replace(
+      /\/+$/,
+      ''
+    ),
+    apiKey: process.env.SNF_INTEGRATION_API_KEY || process.env.NPOF_API_KEY || '',
+    // Plant yang boleh dibaca. Sync berjalan satu job per plant di daftar ini.
+    allowedPlantIds: snfAllowedPlantIds,
+    // Plant default aplikasi (UI fase ini hanya menampilkan PP2).
+    defaultPlantId: snfDefaultPlantId,
+    requestTimeoutMs: parseInt(process.env.SNF_REQUEST_TIMEOUT_MS || '60000', 10),
+    // Jumlah percobaan maksimum (termasuk percobaan pertama).
+    syncRetryAttempts: Math.max(1, parseInt(process.env.SNF_SYNC_RETRY_ATTEMPTS || '3', 10)),
+    syncRetryBackoffMs: Math.max(0, parseInt(process.env.SNF_SYNC_RETRY_BACKOFF_MS || '500', 10)),
   },
 
   // Akun SUPER_ADMIN pertama untuk database yang masih kosong (VPS/Dokploy).

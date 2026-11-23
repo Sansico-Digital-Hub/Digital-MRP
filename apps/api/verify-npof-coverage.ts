@@ -130,7 +130,9 @@ async function main() {
     const npofComplete = await prisma.npofMaterial.create({
       data: {
         npofId: TEST_NPOF_IDS[0],
+        plantId: 2,
         partNumber: PART_COMPLETE,
+        partNumberNorm: PART_COMPLETE.toUpperCase(),
         productName: 'NPOF - part lengkap',
         material: 'Paper',
         gramatur: '300',
@@ -146,7 +148,9 @@ async function main() {
     const npofPartial = await prisma.npofMaterial.create({
       data: {
         npofId: TEST_NPOF_IDS[1],
+        plantId: 2,
         partNumber: PART_PARTIAL,
+        partNumberNorm: PART_PARTIAL.toUpperCase(),
         productName: 'NPOF - part kurang',
         material: 'Paper',
         gramatur: '-',

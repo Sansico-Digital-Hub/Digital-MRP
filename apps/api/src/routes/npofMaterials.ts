@@ -1,207 +1,257 @@
 import { FastifyInstance } from 'fastify';
+import { Prisma } from '@prisma/client';
 import prisma from '../lib/prisma';
 import { authenticate, requireRole } from '../middleware/auth';
 import { EDIT_ROLES } from '../lib/permissions';
 import { config } from '../config';
+import { attachNpofTitles, hasRealPartNumber, sumUpsForScenario } from '../lib/npofNormalize';
+import {
+  describeSnfError,
+  getPlantVerificationState,
+  runExclusiveSync,
+  type SyncDeps,
+} from '../lib/npofSync';
+
+const PLANT_LABEL = 'PT. Printec Perkasa II';
+
+const LIST_SELECT = {
+  id: true,
+  plantId: true,
+  partNumber: true,
+  partNumberNorm: true,
+  partName: true,
+  productName: true,
+  npofId: true,
+  scenario: true,
+  selectedRev: true,
+  statusLabel: true,
+  isApproved: true,
+  upsCounted: true,
+  specSource: true,
+  material: true,
+  gramatur: true,
+  supplier: true,
+  sheetedSize: true,
+  sheetedSizeRaw: true,
+  sheetedSizeNote: true,
+  formulaMaterial: true,
+  ups: true,
+  upsOriginal: true,
+  upsCombined: true,
+  removedInLatestRev: true,
+  isGangPrint: true,
+  isGangPrintParent: true,
+  gangPrintParent: true,
+  gangPrintGroupId: true,
+  groupStatus: true,
+  hasAlt: true,
+  altPossiblyStale: true,
+  newerRevPendingApproval: true,
+  hasConflict: true,
+  specAvailable: true,
+  isActive: true,
+  lastSyncedAt: true,
+} satisfies Prisma.NpofMaterialSelect;
+
+interface ListQuery {
+  page?: string;
+  pageSize?: string;
+  search?: string;
+  scenario?: string;
+  gangPrint?: string;
+  conflict?: string;
+  calculation?: string;
+  statusLabel?: string;
+}
+
+/** Status approval yang dikirim SNF (status_label). */
+const STATUS_LABELS = ['Draft', 'Waiting for Approval', 'Completed'] as const;
+
+function parsePagination(query: ListQuery) {
+  const page = Math.max(1, Number.parseInt(query.page || '1', 10) || 1);
+  const pageSizeRaw = Number.parseInt(query.pageSize || '50', 10) || 50;
+  const pageSize = Math.min(200, Math.max(1, pageSizeRaw));
+  return { page, pageSize };
+}
+
+function buildWhere(query: ListQuery): Prisma.NpofMaterialWhereInput {
+  const where: Prisma.NpofMaterialWhereInput = {
+    plantId: { in: [...config.snf.allowedPlantIds] },
+    isActive: true,
+  };
+
+  const scenario = (query.scenario || '').trim().toLowerCase();
+  if (scenario === 'main' || scenario === 'alt') where.scenario = scenario;
+
+  if (query.gangPrint === 'true') where.isGangPrint = true;
+  if (query.conflict === 'true') where.hasConflict = true;
+
+  // "Dipakai kalkulasi" = predicate yang sama dengan ACTIVE_NPOF_WHERE di
+  // materialPlanning.ts (approved + scenario main). Baris lain tidak pernah
+  // masuk perhitungan Material Planning.
+  const calculation = (query.calculation || '').trim().toLowerCase();
+  if (calculation === 'active') {
+    where.AND = [{ isApproved: true, scenario: 'main' }];
+  } else if (calculation === 'inactive') {
+    where.AND = [{ NOT: { isApproved: true, scenario: 'main' } }];
+  }
+
+  // Filter Status = status_label dari SNF (Draft / Waiting for Approval /
+  // Completed). Nilai di luar daftar diabaikan (jangan menebak).
+  const statusLabel = (query.statusLabel || '').trim().toLowerCase();
+  const matchedStatus = STATUS_LABELS.find((label) => label.toLowerCase() === statusLabel);
+  if (matchedStatus) where.statusLabel = matchedStatus;
+
+  const search = (query.search || '').trim();
+  if (search) {
+    where.OR = [
+      { partNumberNorm: { contains: search.toUpperCase() } },
+      { partName: { contains: search } },
+      { productName: { contains: search } },
+      { supplier: { contains: search } },
+    ];
+  }
+
+  return where;
+}
 
 export default async function npofMaterialsRoutes(server: FastifyInstance) {
-  // Get all NPOF Materials
+  // Daftar NPOF Materials (server-side search, filter, dan pagination).
   server.get('/api/v1/npof-materials', { preValidation: [authenticate] }, async (request, reply) => {
-    const data = await prisma.npofMaterial.findMany({
-      orderBy: [
-        { npofId: 'asc' },
-        { partNumber: 'asc' }
-      ],
-    });
-    return reply.send({ data });
-  });
+    const query = (request.query || {}) as ListQuery;
+    const { page, pageSize } = parsePagination(query);
+    const where = buildWhere(query);
 
-  // Sync from External API
-  server.post('/api/v1/npof-materials/sync', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
-    try {
-      let externalData: any[] = [];
+    const [total, rows, allFiltered, lastSync] = await Promise.all([
+      prisma.npofMaterial.count({ where }),
+      prisma.npofMaterial.findMany({
+        where,
+        select: LIST_SELECT,
+        orderBy: [{ partNumberNorm: 'asc' }, { scenario: 'asc' }],
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      // Baris lengkap (hanya kolom ringan) untuk total UPS & jumlah yang
+      // dikecualikan. Dataset NPOF satu plant masih kecil (ratusan baris).
+      prisma.npofMaterial.findMany({
+        where,
+        select: {
+          scenario: true,
+          partNumber: true,
+          removedInLatestRev: true,
+          upsCounted: true,
+          upsCombined: true,
+          upsOriginal: true,
+          ups: true,
+        },
+      }),
+      prisma.npofMaterial.aggregate({
+        where: { plantId: { in: [...config.snf.allowedPlantIds] } },
+        _max: { lastSyncedAt: true },
+      }),
+    ]);
 
-      try {
-        const response = await fetch(`${config.npofApi.url}/npof/process-a/materials`, {
-          method: 'GET',
-          headers: {
-            'Content-Type': 'application/json',
-            'X-API-Key': config.npofApi.key
-          }
-        });
+    const selectedScenario =
+      query.scenario === 'alt' ? 'alt' : query.scenario === 'main' ? 'main' : 'main';
+    // Baris yang tidak ikut total/ekspor: belum approved (upsCounted=false),
+    // dihapus di revisi terbaru, atau tanpa part number.
+    const excluded = allFiltered.filter(
+      (row) =>
+        !row.upsCounted || row.removedInLatestRev || !hasRealPartNumber(row.partNumber)
+    ).length;
 
-        if (!response.ok) {
-          const errBody = (await response.json().catch(() => ({}))) as any;
-          const detailMsg = errBody?.detail || errBody?.message || response.statusText;
-          return reply.code(response.status).send({ 
-            error: 'External API Error', 
-            message: `Failed to fetch data from NPOF API: ${detailMsg}` 
-          });
-        }
-
-        const result = (await response.json()) as any;
-        
-        if (result.status !== 'success' || !Array.isArray(result.data)) {
-          return reply.code(400).send({
-            error: 'Invalid Data',
-            message: 'Received invalid data format from NPOF API'
-          });
-        }
-        
-        externalData = result.data;
-      } catch (fetchError: any) {
-        server.log.error(`Failed to connect to NPOF API: ${fetchError.message}`);
-        return reply.code(502).send({
-          error: 'Bad Gateway',
-          message: 'Failed to connect to NPOF API. Please ensure the external server is running.'
-        });
-      }
-
-      let syncCount = 0;
-      let skippedCount = 0;
-
-      // Process each item
-      for (const item of externalData) {
-        const { npof_id, product_name, part_number, material, sheeted_size, formula_material, ups } = item;
-        const rawGramatur = item.gramatur ?? item.gramature ?? item.gramasi ?? item.gsm ?? item.gramatur_material;
-        const rawSupplier = item.supplier ?? item.vendor ?? item.supplier_name ?? item.vendor_name;
-
-        const cleanNpofId = typeof npof_id === 'number' ? npof_id : parseInt(String(npof_id || 0), 10);
-        const cleanPartNumber = (part_number != null && part_number !== 'null') ? String(part_number) : '-';
-        const cleanProductName = (product_name != null && product_name !== 'null') ? String(product_name) : '-';
-        const cleanMaterial = (material != null && material !== 'null') ? String(material) : '';
-        const cleanGramatur = (rawGramatur != null && rawGramatur !== 'null') ? String(rawGramatur) : '';
-        const cleanSupplier = (rawSupplier != null && rawSupplier !== 'null') ? String(rawSupplier) : '';
-        const cleanSheetedSize = (sheeted_size != null && sheeted_size !== 'null') ? String(sheeted_size) : '';
-        const cleanFormulaMaterial = (formula_material != null && formula_material !== 'null') ? String(formula_material) : '';
-        const cleanUps = (ups != null && ups !== 'null') ? String(ups) : '';
-        
-        // Find existing record
-        const existing = await prisma.npofMaterial.findUnique({
-          where: {
-            npofId_partNumber: {
-              npofId: cleanNpofId,
-              partNumber: cleanPartNumber
-            }
-          }
-        });
-
-        // If it exists and is edited locally, DO NOT overwrite (Option A)
-        if (existing && existing.isEdited) {
-          skippedCount++;
-          continue;
-        }
-
-        // Upsert data
-        await prisma.npofMaterial.upsert({
-          where: {
-            npofId_partNumber: {
-              npofId: cleanNpofId,
-              partNumber: cleanPartNumber
-            }
-          },
-          update: {
-            productName: cleanProductName,
-            material: cleanMaterial,
-            gramatur: cleanGramatur,
-            supplier: cleanSupplier,
-            sheetedSize: cleanSheetedSize,
-            formulaMaterial: cleanFormulaMaterial,
-            ups: cleanUps,
-            lastSyncedAt: new Date()
-          },
-          create: {
-            npofId: cleanNpofId,
-            partNumber: cleanPartNumber,
-            productName: cleanProductName,
-            material: cleanMaterial,
-            gramatur: cleanGramatur,
-            supplier: cleanSupplier,
-            sheetedSize: cleanSheetedSize,
-            formulaMaterial: cleanFormulaMaterial,
-            ups: cleanUps,
-            lastSyncedAt: new Date()
-          }
-        });
-
-        syncCount++;
-      }
-
-      return reply.code(200).send({
-        message: 'Sync completed successfully',
-        syncCount,
-        skippedCount,
-        totalProcessed: externalData.length
-      });
-
-    } catch (error) {
-      server.log.error(error);
-      return reply.code(500).send({ 
-        error: 'Internal Server Error', 
-        message: 'Failed to sync with NPOF API' 
-      });
-    }
-  });
-
-  // Edit (Update) Manual
-  server.put('/api/v1/npof-materials/:id', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-    const { partNumber, productName, material, gramatur, supplier, sheetedSize, formulaMaterial, ups } = request.body as any;
-
-    const existing = await prisma.npofMaterial.findUnique({ where: { id } });
-    if (!existing) {
-      return reply.code(404).send({ error: 'Not Found', message: 'Record not found' });
-    }
-
-    const updated = await prisma.npofMaterial.update({
-      where: { id },
-      data: {
-        ...(partNumber && { partNumber }),
-        ...(productName && { productName }),
-        ...(material && { material }),
-        ...(gramatur !== undefined && { gramatur }),
-        ...(supplier !== undefined && { supplier }),
-        ...(sheetedSize && { sheetedSize }),
-        ...(formulaMaterial && { formulaMaterial }),
-        ...(ups !== undefined && { ups: String(ups) }),
-        isEdited: true // Mark as edited so it won't be overwritten by sync
+    return reply.send({
+      data: rows,
+      pagination: {
+        page,
+        pageSize,
+        total,
+        totalPages: Math.max(1, Math.ceil(total / pageSize)),
+      },
+      totals: {
+        // UPS hanya untuk satu scenario agar main dan alt tidak pernah dijumlah.
+        ups: sumUpsForScenario(allFiltered, selectedScenario),
+        byScenario: {
+          main: sumUpsForScenario(allFiltered, 'main'),
+          alt: sumUpsForScenario(allFiltered, 'alt'),
+        },
+        rows: allFiltered.length,
+        excluded,
+      },
+      meta: {
+        plantId: config.snf.defaultPlantId,
+        plantLabel: PLANT_LABEL,
+        allowedPlantIds: [...config.snf.allowedPlantIds],
+        lastSyncedAt: lastSync._max.lastSyncedAt,
+        plantVerification: getPlantVerificationState(),
       },
     });
-
-    return reply.send({ data: updated });
   });
 
-  // Delete
-  server.delete('/api/v1/npof-materials/:id', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
-    const { id } = request.params as { id: string };
-
-    const existing = await prisma.npofMaterial.findUnique({ where: { id } });
-    if (!existing) {
-      return reply.code(404).send({ error: 'Not Found', message: 'Record not found' });
-    }
-
-    await prisma.npofMaterial.delete({ where: { id } });
-
-    return reply.send({ message: 'Record deleted successfully' });
-  });
-
-  // Bulk Delete
-  server.post('/api/v1/npof-materials/bulk-delete', { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] }, async (request, reply) => {
-    const { ids } = request.body as { ids: string[] };
-
-    if (!ids || !Array.isArray(ids) || ids.length === 0) {
-      return reply.code(400).send({ error: 'Bad Request', message: 'Valid ids array is required' });
-    }
-
-    try {
-      const result = await prisma.npofMaterial.deleteMany({
-        where: { id: { in: ids } },
+  // Detail satu baris untuk drawer.
+  server.get(
+    '/api/v1/npof-materials/:id',
+    { preValidation: [authenticate] },
+    async (request, reply) => {
+      const { id } = request.params as { id: string };
+      const data = await prisma.npofMaterial.findFirst({
+        where: { id, plantId: { in: [...config.snf.allowedPlantIds] } },
       });
-
-      return reply.send({ message: `Successfully deleted ${result.count} records.`, count: result.count });
-    } catch (error) {
-      server.log.error(error);
-      return reply.code(500).send({ error: 'Internal Server Error', message: 'Failed to delete records' });
+      if (!data) {
+        return reply.code(404).send({ error: 'Not Found', message: 'Record not found' });
+      }
+      return reply.send({
+        data: {
+          ...data,
+          sourceNpofs: attachNpofTitles(data.sourceNpofs, data.npofTitle, data.selectedRev),
+          pendingNpofs: attachNpofTitles(data.pendingNpofs, data.npofTitle, data.selectedRev),
+        },
+      });
     }
-  });
+  );
+
+  // Sync dari SNF: satu job per plant yang diizinkan (saat ini PP2/2).
+  server.post(
+    '/api/v1/npof-materials/sync',
+    { preValidation: [authenticate, requireRole(EDIT_ROLES.material)] },
+    async (request, reply) => {
+      const deps: SyncDeps = {
+        prisma,
+        logger: {
+          info: (message) => server.log.info(message),
+          warn: (message) => server.log.warn(message),
+          error: (message) => server.log.error(message),
+        },
+      };
+
+      try {
+        const summary = await runExclusiveSync(deps);
+
+        if (summary.status === 'failed') {
+          const firstError = summary.plants.find((plant) => plant.error)?.error;
+          return reply.code(502).send({
+            error: 'Sync Failed',
+            message: firstError || 'Sinkronisasi gagal. Data lama tidak diubah.',
+            ...summary,
+          });
+        }
+
+        return reply.send({
+          message:
+            summary.status === 'partial'
+              ? 'Sinkronisasi selesai sebagian. Periksa detail per plant.'
+              : 'Sinkronisasi selesai.',
+          ...summary,
+        });
+      } catch (error) {
+        server.log.error(
+          `NPOF sync gagal: ${error instanceof Error ? error.message : String(error)}`
+        );
+        const described = describeSnfError(error);
+        return reply
+          .code(described.status)
+          .send({ error: 'Sync Failed', message: described.message });
+      }
+    }
+  );
 }

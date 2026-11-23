@@ -29,64 +29,6 @@ async function refreshMrpRangeFor(periodId: string, moduleType: string | null | 
   });
 }
 
-/**
- * Info versi aktif + perubahan data aktif terakhir, untuk strip info di tab
- * "Data Aktif". Sumbernya `mrp_versions` (versi aktif) dan jejak di
- * `planning_cycles` (kapan & siapa yang terakhir mengubah data aktif).
- */
-async function loadActiveDataInfo(periodId: string, moduleType: 'PRODUCTION' | 'MATERIAL') {
-  const [version, cycle] = await Promise.all([
-    prisma.mrpVersion.findFirst({
-      where: { periodId, moduleType, isCurrent: true },
-      select: {
-        id: true,
-        versionNumber: true,
-        uploadedAt: true,
-        uploadedByName: true,
-        fileName: true,
-        itemCount: true,
-        totalQty: true,
-      },
-    }),
-    prisma.planningCycle.findUnique({
-      where: { id: periodId },
-      select: { lastDataChangeAt: true, lastDataChangeBy: true, lastDataChangeKind: true },
-    }),
-  ]);
-
-  const userIds = [cycle?.lastDataChangeBy].filter((id): id is string => Boolean(id));
-  const users = userIds.length
-    ? await prisma.user.findMany({ where: { id: { in: userIds } }, select: { id: true, name: true } })
-    : [];
-  const nameById = new Map(users.map((user) => [user.id, user.name]));
-
-  return {
-    activeVersion: version
-      ? {
-          id: version.id,
-          versionNumber: version.versionNumber,
-          uploadedAt: version.uploadedAt,
-          uploadedByName: version.uploadedByName,
-          fileName: version.fileName,
-          itemCount: version.itemCount,
-          totalQty: version.totalQty,
-        }
-      : null,
-    lastChange: cycle?.lastDataChangeAt
-      ? {
-          at: cycle.lastDataChangeAt,
-          // Periode lama belum punya `lastDataChangeBy/Kind` (kolom baru) → pakai
-          // data upload versi aktif sebagai perkiraan terbaik.
-          byName:
-            (cycle.lastDataChangeBy ? nameById.get(cycle.lastDataChangeBy) : null) ??
-            version?.uploadedByName ??
-            null,
-          kind: cycle.lastDataChangeKind ?? (version ? 'UPLOAD' : null),
-        }
-      : null,
-  };
-}
-
 export default async function weeklyScheduleRoutes(server: FastifyInstance) {
   // GET /api/v1/weekly-schedule — bisa difilter per periode + modul:
   //   ?periodId=...&moduleType=PRODUCTION|MATERIAL
@@ -118,8 +60,8 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
     return reply.send({ data: schedules });
   });
 
-  // GET /api/v1/weekly-schedule/summary - Group by item using the uploaded period's
-  // first data week as W1. Missing/all-zero weeks remain in the calendar.
+  // GET /api/v1/weekly-schedule/summary - Group by item, with W1-W26 relative to today.
+  // W1 = first week whose weekStartDate >= today (today aligned to 00:00).
   server.get('/api/v1/weekly-schedule/summary', { preValidation: [authenticate] }, async (request, reply) => {
     // Ringkasan WAJIB per periode — tanpa ini demand beberapa bulan akan tercampur.
     // moduleType menentukan modul mana yang dibaca (Production vs Material).
@@ -132,48 +74,38 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
     }
     const module = resolveModuleType(moduleType);
 
-    const activeInfo = await loadActiveDataInfo(periodId, module);
+    const today = new Date();
+    today.setUTCHours(0, 0, 0, 0);
 
+    // Fetch only schedules whose week has not ended yet (anchor = today).
+    // Sorting by weekStartDate gives chronological order.
     const schedules = await prisma.weeklySchedule.findMany({
-      where: { periodId, moduleType: module },
+      where: { periodId, moduleType: module, weekStartDate: { gte: today } },
       include: { item: true },
-      orderBy: [{ weekNumber: 'asc' }, { weekStartDate: 'asc' }],
+      orderBy: [{ weekStartDate: 'asc' }],
     });
 
-    if (schedules.length === 0) {
-      return reply.send({
-        data: [],
-        year: new Date().getFullYear(),
-        moduleType: module,
-        weeks: [],
-        periodStart: null,
-        ...activeInfo,
-      });
+    // Map every distinct weekStartDate to a relative position (W1, W2, ...).
+    const uniqueStarts: number[] = [];
+    const seenStarts = new Set<number>();
+    for (const s of schedules) {
+      const ts = s.weekStartDate.getTime();
+      if (!seenStarts.has(ts)) {
+        seenStarts.add(ts);
+        uniqueStarts.push(ts);
+      }
     }
-
-    // W1 = minggu pertama DATA yang diunggah (nomor minggu terkecil), bukan
-    // tanggal terawal yang kebetulan tersisa di database dan bukan hari ini.
-    // Seluruh 26 kolom lalu dibentuk dengan penambahan TEPAT 7 hari.
-    const firstWeekNumber = schedules[0].weekNumber;
-    const periodStart = new Date(schedules[0].weekStartDate);
-    periodStart.setUTCHours(0, 0, 0, 0);
-    const weekMilliseconds = 7 * 86400000;
-    const weeks = Array.from({ length: 26 }, (_, index) => {
-      const weekStart = new Date(periodStart.getTime() + index * weekMilliseconds);
-      const weekEnd = new Date(weekStart.getTime() + 6 * 86400000);
-      return {
-        weekNumber: index + 1,
-        weekStartDate: weekStart.toISOString().slice(0, 10),
-        weekEndDate: weekEnd.toISOString().slice(0, 10),
-      };
+    uniqueStarts.sort((a, b) => a - b);
+    const limitedStarts = uniqueStarts.slice(0, 26); // cap at 26 weeks
+    const relWeekByStart: Record<number, number> = {};
+    limitedStarts.forEach((ts, idx) => {
+      relWeekByStart[ts] = idx + 1;
     });
-    const relativeWeekByDate = new Map(
-      weeks.map((week) => [week.weekStartDate, week.weekNumber]),
-    );
 
     const itemMap: Record<string, any> = {};
-    const assign = (s: (typeof schedules)[number], relW: number) => {
-      const weekDate = s.weekStartDate.toISOString().slice(0, 10);
+    for (const s of schedules) {
+      const relW = relWeekByStart[s.weekStartDate.getTime()];
+      if (!relW) continue; // beyond W26
       if (!itemMap[s.itemId]) {
         itemMap[s.itemId] = {
           itemId: s.itemId,
@@ -187,36 +119,13 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
       itemMap[s.itemId].weeks[relW] = {
         id: s.id,
         quantity: s.quantity,
-        weekStartDate: weekDate,
-        weekEndDate: s.weekEndDate.toISOString().slice(0, 10),
+        weekStartDate: s.weekStartDate,
+        weekEndDate: s.weekEndDate,
       };
       itemMap[s.itemId].total += s.quantity;
-    };
-
-    // Baris yang tanggalnya cocok dengan kalender dipetakan lewat tanggal.
-    for (const s of schedules) {
-      const relW = relativeWeekByDate.get(s.weekStartDate.toISOString().slice(0, 10));
-      if (relW) assign(s, relW);
     }
 
-    // Baris dengan tanggal menyimpang (data lama sebelum perbaikan tahun) tetap
-    // ditempatkan menurut nomor minggunya supaya nilainya tidak hilang.
-    for (const s of schedules) {
-      if (relativeWeekByDate.has(s.weekStartDate.toISOString().slice(0, 10))) continue;
-      const relW = s.weekNumber - firstWeekNumber + 1;
-      if (relW < 1 || relW > 26) continue; // di luar jendela 26 minggu
-      if (itemMap[s.itemId]?.weeks[relW]) continue; // kolom sudah terisi
-      assign(s, relW);
-    }
-
-    return reply.send({
-      data: Object.values(itemMap),
-      year: periodStart.getUTCFullYear(),
-      moduleType: module,
-      weeks,
-      periodStart: weeks[0].weekStartDate,
-      ...activeInfo,
-    });
+    return reply.send({ data: Object.values(itemMap), year: today.getFullYear(), moduleType: module });
   });
 
   // POST /api/v1/weekly-schedule (single upsert)
@@ -302,7 +211,7 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
         },
       });
 
-      await touchPeriod(periodId, request.user!.id);
+      await touchPeriod(periodId);
       await refreshMrpRangeFor(periodId, moduleType);
 
       await prisma.auditLog.create({
@@ -393,9 +302,7 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
         );
       }
 
-      const replacePeriod = saveMode === 'overwrite' && body.replacePeriod === true;
-
-      if (saveMode === 'overwrite' && !replacePeriod) {
+      if (saveMode === 'overwrite') {
         const scopeMap = new Map<string, { year: number; weekNumber: number; itemIds: Set<string> }>();
         for (const r of validRecords) {
           const year = parseInt(r.year);
@@ -426,12 +333,10 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
 
       // ── Step 2: Fetch all existing schedules for the years in one query ──────
       const years = [...new Set(validRecords.map((r: any) => parseInt(r.year)))] as number[];
-      const existingSchedules = replacePeriod
-        ? []
-        : await prisma.weeklySchedule.findMany({
-            where: { periodId, moduleType, year: { in: years } },
-            select: { id: true, year: true, weekNumber: true, itemId: true, quantity: true },
-          });
+      const existingSchedules = await prisma.weeklySchedule.findMany({
+        where: { periodId, moduleType, year: { in: years } },
+        select: { id: true, year: true, weekNumber: true, itemId: true, quantity: true },
+      });
       const scheduleMap: Record<string, { id: string; quantity: number }> = {};
       for (const s of existingSchedules) {
         scheduleMap[`${s.year}_${s.weekNumber}_${s.itemId}`] = { id: s.id, quantity: s.quantity };
@@ -449,7 +354,7 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
         const key = `${parseInt(r.year)}_${parseInt(r.weekNumber)}_${itemId}`;
         const existing = scheduleMap[key];
         const newQty = saveMode === 'add' && existing ? existing.quantity + parseFloat(r.quantity) : parseFloat(r.quantity);
-        if (newQty <= 0 && saveMode !== 'overwrite' && Number(r.quantity) !== 0) continue;
+        if (newQty <= 0 && saveMode !== 'overwrite') continue;
 
         if (existing) {
           toUpdate.push({ id: existing.id, quantity: newQty, weekStartDate: startDate, weekEndDate: endDate });
@@ -473,9 +378,6 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
 
       await prisma.$transaction(
         async (tx) => {
-          if (replacePeriod) {
-            await tx.weeklySchedule.deleteMany({ where: { periodId, moduleType } });
-          }
           // createMany in chunks
           for (let i = 0; i < toCreate.length; i += CHUNK_SIZE) {
             const result = await tx.weeklySchedule.createMany({ data: toCreate.slice(i, i + CHUNK_SIZE), skipDuplicates: true });
@@ -567,7 +469,7 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
         },
       });
 
-      await touchPeriod(existing.periodId, request.user!.id);
+      await touchPeriod(existing.periodId);
       await refreshMrpRangeFor(existing.periodId, existing.moduleType);
       return reply.send({ data: schedule });
     }
@@ -600,7 +502,7 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
         where: { id: { in: ids } },
       });
 
-      for (const periodId of periodIds) await touchPeriod(periodId, request.user!.id);
+      for (const periodId of periodIds) await touchPeriod(periodId);
       for (const periodId of periodIds) {
         const mod = affected.find((s) => s.periodId === periodId)?.moduleType;
         await refreshMrpRangeFor(periodId, mod);
@@ -635,7 +537,7 @@ export default async function weeklyScheduleRoutes(server: FastifyInstance) {
         return reply.code(403).send({ error: 'Forbidden', message: forbiddenModuleMessage(request.user?.role) });
       }
       await prisma.weeklySchedule.delete({ where: { id } });
-      await touchPeriod(existing.periodId, request.user!.id);
+      await touchPeriod(existing.periodId);
       await refreshMrpRangeFor(existing.periodId, existing.moduleType);
       return reply.send({ message: 'Deleted successfully' });
     }

@@ -456,25 +456,82 @@ model OutstandingPO {
 // NPOF MATERIALS
 // ============================================
 
+/// Cermin read-only data NPOF dari SNF, satu baris per (plantId, partNumberNorm, scenario).
+/// Identitas baris memakai `partNumberNorm`, sedangkan `partNumber` menyimpan nilai
+/// mentah untuk ditampilkan. `scenario` memisahkan "main" dan "alt" supaya UPS
+/// keduanya tidak pernah dijumlahkan.
 model NpofMaterial {
-  id              String    @id @default(cuid())
-  npofId          Int
+  id              String   @id @default(cuid())
+  plantId         Int      @default(2)
+  // Nilai mentah dari SNF (dipakai untuk display).
   partNumber      String
+  // trim + collapse whitespace + UPPERCASE; bagian dari kunci unik.
+  partNumberNorm  String
+  partName        String?
   productName     String
-  material        String?
-  gramatur        String?
-  supplier        String?
-  sheetedSize     String?
-  formulaMaterial String?   @db.Text
-  ups             String?
-  isEdited        Boolean   @default(false)
-  lastSyncedAt    DateTime?
-  createdAt       DateTime  @default(now())
-  updatedAt       DateTime  @updatedAt
+  npofTitle       String?  @db.Text
+  // selected_npof_id dari SNF (null bila tidak ada revisi terpilih).
+  npofId          Int?
+  scenario        String   @default("main")
+  selectedRev     String?
 
-  @@unique([npofId, partNumber])
-  @@index([npofId])
+  /// Status NPOF dari SNF: "Draft" / "Waiting for Approval" / "Completed".
+  statusLabel String?
+  /// false = belum approved; baris ditampilkan muted dan tidak dihitung ke UPS.
+  isApproved  Boolean @default(false)
+  /// true hanya untuk baris yang ikut dihitung ke total UPS/ekspor.
+  upsCounted  Boolean @default(false)
+
+  removedInLatestRev      Boolean @default(false)
+  isGangPrint             Boolean @default(false)
+  isGangPrintParent       Boolean @default(false)
+  gangPrintParent         String?
+  gangPrintGroupId        Int?
+  groupStatus             String?
+  hasAlt                  Boolean @default(false)
+  altPossiblyStale        Boolean @default(false)
+  newerRevPendingApproval Boolean @default(false)
+  hasConflict             Boolean @default(false)
+
+  // Detail payload SNF untuk panel detail (read-only).
+  conflicts    Json?
+  groupMembers Json?
+  pendingNpofs Json?
+  sourceNpofs  Json?
+
+  // Spesifikasi hasil merge endpoint utama + endpoint legacy.
+  material         String?
+  gramatur         String?
+  supplier         String?
+  sheetedSize      String?
+  sheetedSizeRaw   String?
+  lengthCm         Float?
+  widthCm          Float?
+  sheetedSizeNote  String?
+  formulaMaterial  String? @db.Text
+  // "own" | "parent" | "none" (spec_source dari SNF).
+  specSource       String?
+  // Nilai `spec.*` mentah untuk tooltip saat spec diwarisi dari induk.
+  rawSpec          Json?
+  specAvailable    Boolean @default(false)
+
+  // `ups` = nilai tampilan (upsCombined ?? upsOriginal) agar konsumen lama
+  // (mesin Material Calculation) tetap membaca kolom yang sama.
+  ups         String?
+  upsOriginal Int?
+  upsCombined Int?
+
+  isActive     Boolean   @default(true)
+  lastSyncedAt DateTime?
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+
+  @@unique([plantId, partNumberNorm, scenario])
+  @@index([plantId, scenario, isActive])
+  @@index([plantId, statusLabel])
+  @@index([partNumberNorm])
   @@index([partNumber])
+  @@index([npofId])
   @@map("npof_materials")
 }
 

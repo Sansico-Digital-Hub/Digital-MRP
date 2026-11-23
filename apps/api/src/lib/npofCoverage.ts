@@ -70,7 +70,7 @@ export interface NpofCoverageInput {
     quantity: number;
   }>;
   npofs: Array<{
-    npofId: number;
+    npofId: number | null;
     partNumber: string;
     productName?: string | null;
     material?: string | null;
