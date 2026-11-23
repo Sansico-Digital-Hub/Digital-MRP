@@ -25,6 +25,7 @@ import historyRoutes from './routes/history';
 import fgStockHistoryRoutes from './routes/fgStockHistory';
 import { startCleanupSchedule, stopCleanupSchedule } from './lib/cleanup';
 import { bootstrapAdmin } from './lib/bootstrapAdmin';
+import { ensurePlantVerification } from './lib/npofSync';
 import multipart from '@fastify/multipart';
 
 const server = Fastify({
@@ -170,6 +171,18 @@ async function start() {
 
     // Buat akun admin pertama bila database masih kosong (lihat lib/bootstrapAdmin.ts).
     await bootstrapAdmin();
+
+    // Verifikasi plant SNF sekali saat startup: PP2 harus ada di
+    // SNF_ALLOWED_PLANT_IDS. Tidak memblokir startup; bila SNF sedang down,
+    // sync akan mencoba verifikasi sekali lagi dan menolak berjalan bila gagal.
+    void ensurePlantVerification({
+      prisma,
+      logger: {
+        info: (message) => server.log.info(message),
+        warn: (message) => server.log.warn(message),
+        error: (message) => server.log.error(message),
+      },
+    });
 
     await server.listen({
       port: config.port,

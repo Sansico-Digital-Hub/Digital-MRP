@@ -136,7 +136,15 @@ Complete index untuk semua dokumentasi PDITS.
 
 ## 📁 Reference
 
-### 14. [FILES_CREATED.md](FILES_CREATED.md) 📄
+### 14. [NPOF_INTEGRATION.md](NPOF_INTEGRATION.md) 🔗
+**Integrasi NPOF Materials ↔ SNF + PP2/2**
+- Base URL, API key, dan daftar plant yang diizinkan
+- Versi kontrak endpoint + contoh payload (API key di-redact)
+- Aturan merge spesifikasi, normalisasi, dan sync per plant
+- Pemetaan kolom UI dan error handling
+- Cara menambah plant tanpa migrasi
+
+### 15. [FILES_CREATED.md](FILES_CREATED.md) 📄
 **Documentation of all created files**
 - File structure
 - Detailed file descriptions

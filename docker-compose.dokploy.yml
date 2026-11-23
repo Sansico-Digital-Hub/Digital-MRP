@@ -99,10 +99,31 @@ services:
       # Akun admin pertama. Hanya dipakai saat tabel users masih kosong.
       ADMIN_EMAIL: ${ADMIN_EMAIL}
       ADMIN_PASSWORD: ${ADMIN_PASSWORD}
-      # Pengganti default 127.0.0.1:8008 yang di dalam container menunjuk
-      # ke container itu sendiri (tidak akan pernah ketemu).
+      # Integrasi SNF (read-only). Ini nama yang didokumentasikan di
+      # .env.production.example; kode juga masih menerima nama lama NPOF_*
+      # sebagai fallback, jadi keduanya diteruskan ke container.
+      # Default 127.0.0.1:8008 hanya berlaku kalau semuanya kosong, dan di
+      # dalam container alamat itu menunjuk ke container itu sendiri.
+      SNF_BASE_URL: ${SNF_BASE_URL}
+      SNF_INTEGRATION_API_KEY: ${SNF_INTEGRATION_API_KEY}
+      SNF_ALLOWED_PLANT_IDS: ${SNF_ALLOWED_PLANT_IDS:-2}
+      SNF_DEFAULT_PLANT_ID: ${SNF_DEFAULT_PLANT_ID:-2}
+      SNF_REQUEST_TIMEOUT_MS: ${SNF_REQUEST_TIMEOUT_MS:-60000}
+      SNF_SYNC_RETRY_ATTEMPTS: ${SNF_SYNC_RETRY_ATTEMPTS:-3}
+      SNF_SYNC_RETRY_BACKOFF_MS: ${SNF_SYNC_RETRY_BACKOFF_MS:-500}
       NPOF_API_URL: ${NPOF_API_URL}
       NPOF_API_KEY: ${NPOF_API_KEY}
+      # Batas ukuran satu file Excel yang di-upload. Default 20 MB; batas luar
+      # tetap nginx (60m) dan bodyLimit Fastify (50MB).
+      MAX_UPLOAD_MB: ${MAX_UPLOAD_MB:-20}
+      # Parameter perhitungan material (semuanya punya default di kode).
+      MATERIAL_SIZE_TOLERANCE_CM: ${MATERIAL_SIZE_TOLERANCE_CM:-2}
+      SHEETS_PER_RIM: ${SHEETS_PER_RIM:-500}
+      MATERIAL_REQUIRE_SUPPLIER: ${MATERIAL_REQUIRE_SUPPLIER:-true}
+      MATERIAL_REC_MAX_OPTIONS: ${MATERIAL_REC_MAX_OPTIONS:-8}
+      MATERIAL_REC_MAX_MULTIPLIER: ${MATERIAL_REC_MAX_MULTIPLIER:-6}
+      MATERIAL_REC_INCLUDE_NPOF: ${MATERIAL_REC_INCLUDE_NPOF:-true}
+      MATERIAL_REC_STANDARD_SIZES: ${MATERIAL_REC_STANDARD_SIZES:-180}
       VAPID_PUBLIC_KEY: ${VAPID_PUBLIC_KEY}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY}
       VAPID_SUBJECT: ${VAPID_SUBJECT}

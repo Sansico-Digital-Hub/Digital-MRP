@@ -34,6 +34,19 @@ type SourceType = (typeof SOURCE_TYPES)[number];
 const RETENTION_MONTHS = 18;
 const RETENTION_EXTENSIONS = [3, 6, 9, 12];
 
+/**
+ * NPOF yang dipakai mesin kalkulasi: hanya baris aktif, approved, scenario
+ * "main", dan plant yang diizinkan. Endpoint SNF kini mengirim semua status
+ * (Draft/Waiting/Completed); perhitungan material tetap hanya memakai NPOF
+ * approved. Baris "alt" sengaja tidak ikut supaya UPS tidak dobel.
+ */
+const ACTIVE_NPOF_WHERE = {
+  isActive: true,
+  isApproved: true,
+  scenario: 'main',
+  plantId: { in: [...config.snf.allowedPlantIds] },
+};
+
 const MONTH_NAMES_ID = [
   'Januari',
   'Februari',
@@ -197,7 +210,7 @@ async function calculateCycleResult(cycleId: string, userId: string): Promise<Ca
     prisma.stockRawMaterial.findMany({ where: { periodId: cycleId }, orderBy: { date: 'desc' } }),
     prisma.outstandingPO.findMany({ where: { periodId: cycleId } }),
     prisma.wIP.findMany({ where: { periodId: cycleId, moduleType: MATERIAL }, include: { item: true } }),
-    prisma.npofMaterial.findMany(), // global, dipakai bersama semua periode
+    prisma.npofMaterial.findMany({ where: ACTIVE_NPOF_WHERE }), // global, dipakai bersama semua periode
     // Penawaran pool yang dikeluarkan user untuk ukuran tertentu (per periode).
     prisma.materialCalcExclusion.findMany({ where: { cycleId } }),
   ]);
@@ -443,7 +456,11 @@ export default async function materialPlanningRoutes(server: FastifyInstance) {
           },
         },
       }),
-      prisma.npofMaterial.aggregate({ _count: { _all: true }, _max: { updatedAt: true } }),
+      prisma.npofMaterial.aggregate({
+        where: ACTIVE_NPOF_WHERE,
+        _count: { _all: true },
+        _max: { updatedAt: true },
+      }),
     ]);
 
     const npofLastUpdated = npofAgg._max.updatedAt;
@@ -737,7 +754,10 @@ export default async function materialPlanningRoutes(server: FastifyInstance) {
       where: { cycleId: id, isCurrent: true },
       select: { calculatedAt: true },
     });
-    const npofAgg = await prisma.npofMaterial.aggregate({ _max: { updatedAt: true } });
+    const npofAgg = await prisma.npofMaterial.aggregate({
+      where: ACTIVE_NPOF_WHERE,
+      _max: { updatedAt: true },
+    });
     const npofLastUpdated = npofAgg._max.updatedAt;
 
     const changed =
@@ -770,7 +790,7 @@ export default async function materialPlanningRoutes(server: FastifyInstance) {
 
     const [mrpRows, npofs] = await Promise.all([
       prisma.weeklySchedule.findMany({ where: { periodId: id, moduleType: MATERIAL }, include: { item: true } }),
-      prisma.npofMaterial.findMany(),
+      prisma.npofMaterial.findMany({ where: ACTIVE_NPOF_WHERE }),
     ]);
 
     const analysis = analyzeNpofCoverage({
